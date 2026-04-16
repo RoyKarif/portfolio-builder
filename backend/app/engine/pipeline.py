@@ -1,0 +1,114 @@
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+
+from app.data.market import fetch_stock_data
+from app.engine.universe import select_universe
+from app.engine.predictor import predict_returns
+from app.engine.optimizer import optimize_portfolio
+from app.engine.simulator import run_monte_carlo
+
+HORIZON_YEARS = {
+    "6m": 0.5,
+    "1-3y": 2.0,
+    "3-5y": 4.0,
+    "5y+": 7.0,
+}
+
+
+def generate_portfolio(
+    country: str,
+    risk_level: int,
+    investment_horizon: str,
+    available_amount: float,
+    target_return: float,
+    preferred_sectors: list[str],
+    include_tickers: list[str],
+    exclude_tickers: list[str],
+    db,
+) -> dict:
+    # Stage 1: Universe Selection
+    stocks = select_universe(
+        country=country,
+        sectors=preferred_sectors,
+        include_tickers=include_tickers,
+        exclude_tickers=exclude_tickers,
+    )
+
+    if len(stocks) < 5:
+        return {"error": "Not enough stocks found. Try broadening your sector selection."}
+
+    # Stage 2: ML Prediction
+    stocks = predict_returns(stocks, db=db)
+
+    tickers = [s["ticker"] for s in stocks]
+    expected_rets = np.array([s["expected_return"] for s in stocks])
+
+    end_date = datetime.utcnow().strftime("%Y-%m-%d")
+    start_date = (datetime.utcnow() - timedelta(days=2 * 365)).strftime("%Y-%m-%d")
+
+    price_data = {}
+    for ticker in tickers:
+        try:
+            df = fetch_stock_data(ticker, start=start_date, end=end_date)
+            price_data[ticker] = df["Close"]
+        except Exception:
+            continue
+
+    valid_tickers = [t for t in tickers if t in price_data]
+    if len(valid_tickers) < 5:
+        return {"error": "Not enough historical data available."}
+
+    prices_df = pd.DataFrame(price_data).dropna()
+    returns_df = prices_df.pct_change().dropna()
+    cov_matrix = returns_df.cov().values * 252
+
+    ticker_to_stock = {s["ticker"]: s for s in stocks}
+    valid_stocks = [ticker_to_stock[t] for t in valid_tickers]
+    valid_returns = np.array([s["expected_return"] for s in valid_stocks])
+
+    # Stage 3: Markowitz Optimization
+    opt_result = optimize_portfolio(
+        tickers=valid_tickers,
+        expected_returns=valid_returns,
+        cov_matrix=cov_matrix,
+        risk_level=risk_level,
+        target_return=target_return,
+    )
+
+    # Stage 4: Monte Carlo Simulation
+    horizon_years = HORIZON_YEARS.get(investment_horizon, 3.0)
+    weights_array = np.array([opt_result["weights"].get(t, 0) for t in valid_tickers])
+
+    sim_result = run_monte_carlo(
+        weights=weights_array,
+        expected_returns=valid_returns,
+        cov_matrix=cov_matrix,
+        initial_value=available_amount,
+        horizon_years=horizon_years,
+    )
+
+    holdings = []
+    for ticker in valid_tickers:
+        w = opt_result["weights"].get(ticker, 0)
+        if w < 0.01:
+            continue
+        stock = ticker_to_stock[ticker]
+        holdings.append({
+            "ticker": ticker,
+            "company_name": stock["company_name"],
+            "sector": stock["sector"],
+            "allocation_pct": round(w * 100, 2),
+            "expected_return": round(stock["expected_return"] * 100, 2),
+        })
+
+    return {
+        "holdings": holdings,
+        "risk_score": round(opt_result["portfolio_volatility"] * 100, 2),
+        "expected_return_low": round(sim_result["return_low"] * 100, 2),
+        "expected_return_high": round(sim_result["return_high"] * 100, 2),
+        "portfolio_return": round(opt_result["portfolio_return"] * 100, 2),
+        "simulation": sim_result,
+        "status": opt_result["status"],
+    }
