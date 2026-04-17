@@ -1,6 +1,7 @@
 import { useState, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/client";
+import GeneratingOverlay from "../components/GeneratingOverlay";
 
 const SECTORS = [
   "Technology", "Healthcare", "Energy", "Finance",
@@ -62,6 +63,7 @@ export default function ProfileForm() {
 
   return (
     <div className="max-w-2xl mx-auto">
+      {loading && <GeneratingOverlay sectorCount={sectors.length} />}
       <h1 className="text-2xl font-bold mb-6">Build Your Portfolio</h1>
 
       <form onSubmit={handleSubmit} className="space-y-6">
