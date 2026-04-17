@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import api from "../api/client";
+import api, { deletePortfolio } from "../api/client";
 import PortfolioCard from "./PortfolioCard";
 import Spinner from "../components/Spinner";
+import ConfirmDeleteModal from "../components/ConfirmDeleteModal";
 
 interface PortfolioItem {
   id: string;
@@ -17,6 +18,7 @@ interface PortfolioItem {
 export default function DashboardPage() {
   const [portfolios, setPortfolios] = useState<PortfolioItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     api.get("/portfolios").then((resp) => {
@@ -24,6 +26,14 @@ export default function DashboardPage() {
       setLoading(false);
     });
   }, []);
+
+  const handleDeleteConfirm = async () => {
+    if (!deletingId) return;
+    const id = deletingId;
+    await deletePortfolio(id);
+    setPortfolios((prev) => prev.filter((p) => p.id !== id));
+    setDeletingId(null);
+  };
 
   if (loading) return <Spinner />;
 
@@ -55,10 +65,17 @@ export default function DashboardPage() {
               expectedReturnHigh={p.expected_return_high}
               totalValue={p.total_value}
               createdAt={p.created_at}
+              onDelete={setDeletingId}
             />
           ))}
         </div>
       )}
+
+      <ConfirmDeleteModal
+        open={!!deletingId}
+        onCancel={() => setDeletingId(null)}
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   );
 }
