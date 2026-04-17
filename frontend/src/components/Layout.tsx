@@ -20,6 +20,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex gap-4 items-center">
             <Link to="/dashboard" className="text-gray-600 hover:text-gray-900">Dashboard</Link>
             <Link to="/profile/new" className="text-gray-600 hover:text-gray-900">New Portfolio</Link>
+            <Link to="/methodology" className="text-gray-600 hover:text-gray-900">How it works</Link>
             <button onClick={handleLogout} className="text-gray-600 hover:text-gray-900">Logout</button>
           </div>
         </div>

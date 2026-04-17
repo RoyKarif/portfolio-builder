@@ -7,6 +7,7 @@ import Layout from "./components/Layout";
 import DashboardPage from "./dashboard/DashboardPage";
 import ProfileForm from "./profile/ProfileForm";
 import PortfolioPage from "./portfolio/PortfolioPage";
+import MethodologyPage from "./methodology/MethodologyPage";
 
 export default function App() {
   return (
@@ -23,6 +24,9 @@ export default function App() {
           } />
           <Route path="/portfolio/:id" element={
             <ProtectedRoute><Layout><PortfolioPage /></Layout></ProtectedRoute>
+          } />
+          <Route path="/methodology" element={
+            <ProtectedRoute><Layout><MethodologyPage /></Layout></ProtectedRoute>
           } />
           <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
