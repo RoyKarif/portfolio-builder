@@ -43,8 +43,9 @@ def apply_quality_screen(
             })
             continue
 
-        usable = pd.DataFrame({"close": close, "volume": volume}).dropna(how="any")
-        usable = usable[usable.index.date >= cov_cutoff]
+        panel = pd.DataFrame({"close": close, "volume": volume})
+        panel = panel[panel.index.date >= cov_cutoff]
+        usable = panel.dropna(how="any")
 
         if cov_window_size == 0:
             dropped.append({
@@ -58,7 +59,10 @@ def apply_quality_screen(
         history_fraction = len(usable) / cov_window_size
         reasons: list[str] = []
 
-        recent = usable.tail(ADV_LOOKBACK_DAYS)
+        # Trailing ADV_LOOKBACK_DAYS calendar rows from the cov window,
+        # then keep only the usable (non-NaN) rows within that slice.
+        recent_window = panel.tail(ADV_LOOKBACK_DAYS)
+        recent = recent_window.dropna(how="any")
         if len(recent) < MIN_RECENT_OBSERVATIONS:
             adv_30d_usd = None
             reasons.append("insufficient_recent_data")
