@@ -68,15 +68,16 @@ The caller is responsible for aligning its ticker/weight arrays to the cleaned t
 
 ### 2. NaN handling
 
-Applied in this order inside `estimate_covariance`:
+Applied in this order inside `estimate_covariance` to produce a single cleaned working frame, `clean_returns`. **All downstream logic — estimation, fallback, metadata counts, and output alignment — operates on `clean_returns` and its column order.** The original input frame is not used again after cleaning.
 
-1. **Drop all-NaN columns.** Any ticker whose column is entirely NaN is removed. Its name is recorded in `metadata["dropped_tickers"]`.
-2. **Drop rows with any remaining NaN.** After step 1, drop rows where any surviving ticker is NaN. This preserves a consistent observation window across all tickers.
-3. **Validate counts.** After cleaning:
+1. **Validate dtypes up front.** If any column is non-numeric (dtype is not a float/int), raise `ValueError("estimate_covariance requires numeric columns")` immediately. Do **not** coerce silently.
+2. **Drop all-NaN columns.** Any ticker whose column is entirely NaN is removed. Its name is recorded in `metadata["dropped_tickers"]`.
+3. **Drop rows with any remaining NaN.** After step 2, drop rows where any surviving ticker is NaN. This preserves a consistent observation window across all tickers.
+4. **Validate counts.** After cleaning:
    - If `n_tickers < 2` → raise `ValueError("estimate_covariance requires at least 2 tickers after cleaning")`.
    - If `n_observations < 30` → raise `ValueError("estimate_covariance requires at least 30 observations after cleaning")`.
 
-The 30-observation floor is a pragmatic minimum for Ledoit-Wolf on daily data. The caller (`pipeline.py`) already has a broader "not enough historical data" guard upstream; this floor is defensive.
+The 30-observation threshold is an **operational guardrail**, not a claim of statistical sufficiency — it only prevents obviously broken inputs from reaching sklearn. Meaningful sample-size concerns remain the caller's responsibility (the broader "not enough historical data" guard upstream in `pipeline.py` covers that).
 
 ### 3. Error vs fallback
 
@@ -94,7 +95,7 @@ The caller (`pipeline.py`) catches these and returns the same `{"error": "..."}`
 - Numerical issues inside sklearn that produce non-finite output
 
 Fallback behavior:
-- Compute `returns.cov().values * 252` instead.
+- Compute `clean_returns.cov().values * 252` on the **cleaned** frame (never the original input). Using `clean_returns` keeps the fallback matrix shape-consistent with `metadata["n_tickers"]`, `metadata["dropped_tickers"]`, and the output ticker order, and avoids NaN contamination.
 - Set `metadata["method"] = "sample_fallback"`.
 - Set `metadata["fallback_used"] = True`.
 - Set `metadata["fallback_reason"] = <exception type and message>`.
@@ -133,8 +134,8 @@ from app.engine.risk import estimate_covariance
 
 cov_matrix, shrinkage, cov_meta = estimate_covariance(returns_df)
 
-# If estimate_covariance dropped any tickers, realign valid_tickers / valid_stocks
-# before the optimizer call.
+# If estimate_covariance dropped any tickers, realign every ticker-ordered
+# structure before the optimizer call.
 if cov_meta["dropped_tickers"]:
     dropped = set(cov_meta["dropped_tickers"])
     valid_tickers = [t for t in valid_tickers if t not in dropped]
@@ -144,7 +145,7 @@ if cov_meta["dropped_tickers"]:
         return {"error": "Not enough historical data available."}
 ```
 
-Ticker realignment is essential because the shape of `cov_matrix` now reflects the cleaned ticker set, and the optimizer requires `expected_returns` and `cov_matrix` to be aligned.
+**Ticker realignment rule:** after `estimate_covariance` returns, any data structure whose ordering or length is indexed by ticker — including `valid_tickers`, `valid_stocks`, `valid_returns`, `price_data`, and any subsequent weight arrays built from these — MUST be filtered to drop entries in `cov_meta["dropped_tickers"]` and re-aligned to the surviving ticker order before reaching the optimizer. The optimizer requires `expected_returns`, `cov_matrix`, and the ticker list to share a single consistent order; the integration test below is the primary guard against this class of bug.
 
 ### 6. Engine result fields
 
@@ -155,7 +156,9 @@ Add two fields to the dict returned by `generate_portfolio`:
 "shrinkage_intensity": round(shrinkage, 4),       # float in [0, 1]
 ```
 
-These are engine-level fields. Whether they are persisted in the DB snapshot and/or exposed in the API `PortfolioResponse` schema is an implementation decision (see Open Questions). The default in this spec is **persist and include in the API response as optional fields**, so we can inspect historical behavior. No UI surface is added.
+**API exposure (resolved):** include both fields in the `PortfolioResponse` Pydantic schema as **optional** (`covariance_method: str | None = None`, `shrinkage_intensity: float | None = None`). Optional typing preserves backward compatibility for any previously persisted portfolio that lacks these fields. No UI surface is added.
+
+**DB persistence (resolved):** persist these fields in the existing portfolio/snapshot record **only if** the current model already carries ad-hoc engine metadata (e.g. a JSON column) that can absorb new keys without migration. If persistence would require a new migration or a schema change, **skip persistence in this phase** and rely on logging only. The writing-plans phase will inspect the model and make the call; no migration is introduced for this work.
 
 ### 7. Observability (logging)
 
@@ -226,15 +229,6 @@ Extend the existing portfolio-generation smoke test (or add one alongside it):
 - Assert the response includes `covariance_method` and `shrinkage_intensity`.
 - Assert `covariance_method == "ledoit_wolf"` on the happy path.
 - Assert weights still sum to ~1.0 (within 1e-4), no NaN weights, and all weights in `[0, MAX_SINGLE_WEIGHT]`.
-
----
-
-## Open Questions
-
-1. **API exposure.** Should `covariance_method` and `shrinkage_intensity` appear in the `PortfolioResponse` schema, or stay engine-internal (logged only)? Default: include in response as optional fields — zero UI cost, future-friendly.
-2. **DB persistence.** If we persist these in `portfolio_snapshots` or similar, it lets us analyze production behavior over time. Default: persist if the snapshot table already carries engine metadata; otherwise skip for this phase.
-
-Both defaults above are recommendations, not blockers. The writing-plans phase can decide based on the current shape of `PortfolioResponse` and the snapshot model.
 
 ---
 
