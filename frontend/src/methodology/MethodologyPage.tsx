@@ -51,6 +51,13 @@ export default function MethodologyPage() {
           The intuition: don't put all your eggs in one basket. Spreading across multiple stocks and
           sectors reduces the damage any single bad pick can cause.
         </p>
+        <p className="text-gray-700 mb-3">
+          To measure how different stocks move together, we use a shrinkage technique. Raw
+          correlations between stocks can be misleading when the data is noisy. Shrinkage nudges
+          those correlations toward a more reliable baseline, which makes the resulting portfolio
+          less sensitive to random quirks in the historical data. This is a well-established
+          technique in professional portfolio construction.
+        </p>
       </section>
 
       <section id="risk" className="bg-white p-6 rounded-xl shadow mb-6">
