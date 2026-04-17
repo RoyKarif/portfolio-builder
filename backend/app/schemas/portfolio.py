@@ -30,6 +30,8 @@ class PortfolioResponse(BaseModel):
     total_value: float
     holdings: list[HoldingResponse]
     simulation: SimulationResponse
+    covariance_method: str | None = None
+    shrinkage_intensity: float | None = None
 
     model_config = {"from_attributes": True}
 

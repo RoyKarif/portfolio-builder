@@ -24,6 +24,8 @@ MOCK_ENGINE_RESULT = {
     "portfolio_return": 11.5,
     "simulation": {"percentile_10": 42000, "percentile_50": 58000, "percentile_90": 78000, "return_low": 0.052, "return_high": 0.168, "initial_value": 50000, "horizon_years": 4.0, "n_simulations": 10000},
     "status": "optimal",
+    "covariance_method": "ledoit_wolf",
+    "shrinkage_intensity": 0.1823,
 }
 
 
@@ -36,6 +38,8 @@ def test_generate_portfolio(mock_engine, client, auth_headers):
     data = resp.json()
     assert len(data["holdings"]) == 5
     assert data["risk_score"] == 18.5
+    assert data["covariance_method"] == "ledoit_wolf"
+    assert 0.0 <= data["shrinkage_intensity"] <= 1.0
 
 
 @patch("app.api.portfolios.generate_portfolio", return_value=MOCK_ENGINE_RESULT)

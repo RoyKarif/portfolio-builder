@@ -83,6 +83,8 @@ def generate(
         total_value=float(portfolio.total_value),
         holdings=[HoldingResponse(**h) for h in result["holdings"]],
         simulation=SimulationResponse(**result["simulation"]),
+        covariance_method=result.get("covariance_method"),
+        shrinkage_intensity=result.get("shrinkage_intensity"),
     )
 
 
