@@ -8,6 +8,7 @@ from app.engine.universe import select_universe
 from app.engine.predictor import predict_returns
 from app.engine.optimizer import optimize_portfolio
 from app.engine.simulator import run_monte_carlo
+from app.engine.risk import estimate_covariance
 
 HORIZON_YEARS = {
     "6m": 0.5,
@@ -73,7 +74,19 @@ def generate_portfolio(
 
     prices_df = pd.DataFrame(price_data).dropna()
     returns_df = prices_df.pct_change().dropna()
-    cov_matrix = returns_df.cov().values * 252
+
+    try:
+        cov_matrix, shrinkage, cov_meta = estimate_covariance(returns_df)
+    except ValueError:
+        return {"error": "Not enough historical data available."}
+
+    # Realign every ticker-ordered structure to the cleaned ticker set
+    # before handing anything to the optimizer.
+    if cov_meta["dropped_tickers"]:
+        dropped = set(cov_meta["dropped_tickers"])
+        valid_tickers = [t for t in valid_tickers if t not in dropped]
+        if len(valid_tickers) < 5:
+            return {"error": "Not enough historical data available."}
 
     ticker_to_stock = {s["ticker"]: s for s in stocks}
     valid_stocks = [ticker_to_stock[t] for t in valid_tickers]
@@ -122,4 +135,6 @@ def generate_portfolio(
         "portfolio_return": round(opt_result["portfolio_return"] * 100, 2),
         "simulation": sim_result,
         "status": opt_result["status"],
+        "covariance_method": cov_meta["method"],
+        "shrinkage_intensity": round(shrinkage, 4),
     }
