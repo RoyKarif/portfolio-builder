@@ -62,11 +62,12 @@ def predict_returns(stocks: list[dict], db, batch: pd.DataFrame | None = None) -
 
             latest_features = X[-1:].copy()
             predicted_21d_return = float(model.predict(latest_features)[0])
-            # Cap 21-day prediction before annualizing (12x compounding amplifies outliers).
-            predicted_21d_return = max(-0.20, min(0.20, predicted_21d_return))
+            # Cap 21-day prediction tightly — the 12x annualization amplifies outliers.
+            # 4% in 21 days still annualizes to ~60%, which is already aggressive.
+            predicted_21d_return = max(-0.04, min(0.04, predicted_21d_return))
             annual_return = (1 + predicted_21d_return) ** (252 / 21) - 1
-            # Final safety clamp: annual returns outside [-50%, +100%] are unrealistic.
-            annual_return = max(-0.5, min(1.0, annual_return))
+            # Final realistic bound: aggressive stocks rarely sustain >25% annual long-term.
+            annual_return = max(-0.25, min(0.25, annual_return))
             stock["expected_return"] = round(annual_return, 4)
 
         except Exception:
