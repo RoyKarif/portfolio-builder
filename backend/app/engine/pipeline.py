@@ -41,9 +41,10 @@ def generate_portfolio(
         return {"error": "Not enough stocks found. Try broadening your sector selection."}
 
     tickers = [s["ticker"] for s in stocks]
-    end_date = datetime.utcnow().strftime("%Y-%m-%d")
-    start_date_3y = (datetime.utcnow() - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
-    cov_cutoff = (datetime.utcnow() - timedelta(days=2 * 365)).date()
+    snapshot_date = (datetime.utcnow() - timedelta(days=1)).date()
+    end_date = snapshot_date.isoformat()
+    start_date_3y = (snapshot_date - timedelta(days=3 * 365)).isoformat()
+    cov_cutoff = snapshot_date - timedelta(days=2 * 365)
 
     # Single batch download covers both ML training (3yr) and cov matrix (2yr slice).
     batch = yf.download(
