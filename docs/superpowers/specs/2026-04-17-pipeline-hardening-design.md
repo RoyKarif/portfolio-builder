@@ -76,8 +76,8 @@ MIN_RECENT_OBSERVATIONS = 10      # minimum non-null rows in last ADV_LOOKBACK_D
 
 1. Extract `close_series` and `volume_series` from `batch[ticker]["Close"]` and `batch[ticker]["Volume"]`. If either is missing or extraction raises, record `reasons=["missing_data"]`, `adv_30d_usd=None`, `history_fraction=0.0`, and continue.
 2. Build a usable per-day frame `usable = DataFrame({"close": close, "volume": volume}).dropna(how="any")`. Both columns must be present for a row to count. Filter to `usable.index.date >= cov_cutoff`.
-3. **History fraction:** the denominator is the count of distinct trading dates present in the **batch's union date index** (across all tickers) within the cov window — this is the empirical trading calendar that yfinance returned, so holidays and market-specific closures don't penalize. The numerator is the count of rows in `usable` within the same window. `history_fraction = numerator / denominator` (denominator > 0 by construction unless the batch is empty).
-4. **ADV:** take the last `ADV_LOOKBACK_DAYS` rows of `usable`. If fewer than `MIN_RECENT_OBSERVATIONS` rows exist, set `adv_30d_usd = None` and add `"insufficient_recent_data"` to reasons. Otherwise `adv_30d_usd = (usable["close"] * usable["volume"]).tail(ADV_LOOKBACK_DAYS).mean()`.
+3. **History fraction:** the denominator is the count of distinct trading dates present in the **batch's union date index restricted to the covariance window** — i.e. the dates from `batch.index` filtered to `date >= cov_cutoff`. This is the empirical trading calendar that yfinance returned for the cov window, so holidays and market-specific closures don't penalize. The numerator is the count of rows in `usable` within the same window. `history_fraction = numerator / denominator`. **Edge case:** if `denominator == 0` (batch is empty, or no dates fall within the cov window), treat as a drop with `reasons=["sparse_history"]`, `history_fraction=0.0`, and skip ADV computation.
+4. **ADV:** take the **last `ADV_LOOKBACK_DAYS` usable observations** (i.e. the tail after NaN filtering — these may not be strictly consecutive trading days, but post-NaN tail is the right window for a stable liquidity measure on noisy data). If fewer than `MIN_RECENT_OBSERVATIONS` such rows exist, set `adv_30d_usd = None` and add `"insufficient_recent_data"` to reasons. Otherwise `adv_30d_usd = (usable["close"] * usable["volume"]).tail(ADV_LOOKBACK_DAYS).mean()`.
 5. **Decision:**
    - If `adv_30d_usd is None`: ticker drops (the `"insufficient_recent_data"` reason is already in the list).
    - Else if `adv_30d_usd < MIN_ADV_USD`: add `"low_adv"` to reasons.
@@ -237,11 +237,13 @@ The implementation is complete when ALL of the following hold:
    - Drop on sparse history: ticker with <95% of trading days populated is dropped with reason `"sparse_history"`.
    - Drop on insufficient recent data: ticker with <10 non-null rows in last 30 is dropped with reason `"insufficient_recent_data"` and `adv_30d_usd is None`.
    - Drop on missing data: ticker absent from the batch yields `reasons=["missing_data"]`.
+   - Drop on empty cov window: a batch whose date index has zero rows in the cov window (or a ticker whose entire usable series falls before `cov_cutoff`) is dropped with `reasons=["sparse_history"]` and `history_fraction == 0.0`.
    - Order preservation: surviving tickers in `price_data` appear in the order they were in the input `tickers` list.
 
 2. **Determinism integration test passes** in `backend/tests/test_pipeline_integration.py` (extension):
-   - Running `generate_portfolio` twice with the same inputs produces byte-identical results in `holdings`, `risk_score`, `simulation.percentile_10/50/90`.
-   - Running with a meaningfully changed input (e.g. `available_amount` = 10_000 vs 20_000) produces different `simulation.percentile_50`.
+   - Running `generate_portfolio` twice with the same inputs produces results that match within a small float tolerance (e.g. `abs(diff) < 1e-9` for `risk_score`, `simulation.percentile_10/50/90`, and per-holding `allocation_pct`). Tickers and ordering must match exactly. Float-bit equality is not required (cross-platform / cross-numpy-version reproducibility is not a goal).
+   - Running with a meaningfully changed input (e.g. `available_amount` = 10_000 vs 20_000) produces a `simulation.percentile_50` that differs by more than the tolerance.
+   - **Quality-screen downstream contract:** at least one of the integration tests must inject a fake universe where one or more tickers will be dropped by the screen (e.g. low-volume `Volume = 1.0`), then assert that those tickers do not appear in the engine result's `holdings`. This guards against any future regression that bypasses or partially applies the screen.
 
 3. **Optimizer constants updated and verified:**
    - `MAX_SINGLE_WEIGHT == 0.20`.
