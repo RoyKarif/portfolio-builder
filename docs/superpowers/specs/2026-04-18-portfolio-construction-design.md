@@ -79,12 +79,15 @@ Insert HRP/MVO decision logic between `estimate_covariance` and
 `run_monte_carlo`. The optimizer is **not** removed; it sits behind the
 fallback branches.
 
-**Units in this block:** `target_vol` (read from `RISK_VOLATILITY_CAP`) and
-`hrp_candidate_vol` are both **annualized**, so the cap comparison is
-apples-to-apples. `portfolio_vol` (the value handed downstream to the
-existing `risk_score = portfolio_volatility * 100` formula) stays
-**daily** to preserve the existing MVO-path behavior. See §3a for the full
-rationale; this block is where the mismatch matters.
+**Units in this block:** Everything is **annualized**. `estimate_covariance`
+returns an annualized `cov_matrix` (`daily_cov × 252` at
+[backend/app/engine/risk.py:71](backend/app/engine/risk.py#L71)), so
+`sqrt(w @ cov_matrix @ w)` is annualized portfolio volatility directly —
+no extra √252 factor is needed anywhere. `target_vol`,
+`hrp_candidate_vol`, `portfolio_vol`, and the existing MVO path's
+`portfolio_volatility` are all annualized. The downstream
+`risk_score = portfolio_vol * 100` is therefore an annualized vol expressed
+in percent (e.g. ~18 for an 18%-vol portfolio).
 
 ```python
 HRP_VOL_TOLERANCE = 1.10  # Product decision, not a mathematical truth —
@@ -102,14 +105,15 @@ target_vol = RISK_VOLATILITY_CAP[risk_level]
 try:
     hrp_w = hrp_weights(cov_matrix, valid_tickers)
     hrp_arr = np.array([hrp_w[t] for t in valid_tickers])
-    hrp_vol_daily = float(np.sqrt(hrp_arr @ cov_matrix @ hrp_arr))
-    hrp_candidate_vol = hrp_vol_daily * np.sqrt(252)  # annualized
+    # cov_matrix is already annualized inside estimate_covariance, so
+    # this is annualized portfolio vol — no extra √252 needed.
+    hrp_candidate_vol = float(np.sqrt(hrp_arr @ cov_matrix @ hrp_arr))
 
     if hrp_candidate_vol <= target_vol * HRP_VOL_TOLERANCE:
         weights_array = hrp_arr
         weighting_method = "hrp"
-        portfolio_vol = hrp_vol_daily  # daily, to match the existing
-                                       # risk_score formula in MVO path
+        portfolio_vol = hrp_candidate_vol  # annualized; matches the MVO
+                                           # path's portfolio_volatility
         portfolio_return = float(hrp_arr @ valid_returns)
     else:
         # HRP overshot the risk cap — fall back to MVO with predictor μ.
@@ -152,7 +156,7 @@ except ValueError as e:
 assert abs(weights_array.sum() - 1.0) < 1e-8, "weights must sum to 1 before sim"
 
 logger.info("portfolio_construction", extra={
-    "hrp_candidate_vol": hrp_candidate_vol,  # annualized; None iff HRP raised
+    "hrp_candidate_vol": hrp_candidate_vol,  # annualized vol; None iff HRP raised
     "hrp_error": hrp_error,                  # str on HRP error path, else None
     "target_vol": target_vol,                # annualized cap from RISK_VOLATILITY_CAP
     "tolerance": HRP_VOL_TOLERANCE,
@@ -169,7 +173,7 @@ never from the HRP candidate when MVO wins.
 
 | Final state | `weighting_method` | `optimizer_status` | `hrp_candidate_vol` |
 |---|---|---|---|
-| HRP wins | `"hrp"` | `None` | populated |
+| HRP wins | `"hrp"` | `None` | populated (= `risk_score / 100`) |
 | HRP overshoots cap → MVO optimal | `"mvo_risk_cap"` | `"optimal"` | populated |
 | HRP overshoots cap → MVO equal-weight | `"fallback_equal_weight"` | `"fallback_equal_weight"` | populated |
 | HRP raised → MVO optimal | `"mvo_fallback_hrp_error"` | `"optimal"` | `None` |
@@ -188,30 +192,27 @@ never from the HRP candidate when MVO wins.
    the dominant signal for the UI, regardless of why we entered MVO.
 
 **`hrp_candidate_vol` semantics (always):**
-- **Annualized** (daily vol × √252). This is the meaningful unit for users
-  and for comparing against `RISK_VOLATILITY_CAP` (whose values 0.08–0.35
-  read as annualized vol caps).
+- **Annualized** portfolio volatility (`sqrt(w @ cov_matrix @ w)`,
+  no extra √252 since `cov_matrix` is already annualized inside
+  `estimate_covariance` —
+  [backend/app/engine/risk.py:71](backend/app/engine/risk.py#L71)).
+  This matches `RISK_VOLATILITY_CAP` (0.08–0.35 annualized) and the MVO
+  path's `portfolio_volatility`.
 - Computed from the **raw HRP candidate weights**, before any fallback.
+- When HRP wins, `hrp_candidate_vol == risk_score / 100` exactly (both come
+  from the same `sqrt(w @ cov_matrix @ w)` evaluation; `risk_score` is just
+  multiplied by 100 for percentage display).
 
-### 3a — Units note (intentional asymmetry, not a bug)
+### 3a — Units consistency
 
-`hrp_candidate_vol` is annualized. `risk_score` (existing field) is reported
-in **daily** units × 100, because the existing optimizer returns
-`portfolio_volatility` from a daily covariance and the pipeline does
-`risk_score = portfolio_volatility * 100`. We deliberately **do not** change
-`risk_score` semantics in this spec — that's a separate, broader fix.
-
-Practical consequences:
-- `hrp_candidate_vol` and `risk_score` are not directly comparable.
-- The internal HRP-vs-cap comparison annualizes `hrp_vol_daily` so that a
-  ~1.2% daily vol is correctly checked against an 18% (annualized) cap.
-  If we compared in daily units, the cap would be effectively non-binding
-  and the fallback would never fire.
-- The MVO path's `port_vol` continues to be daily; this is pre-existing
-  behavior, preserved to avoid scope creep.
-
-A future phase should annualize `risk_score` consistently across both
-paths. See "Out of scope".
+All vols in the engine — `cov_matrix` (annualized inside
+`estimate_covariance`), `RISK_VOLATILITY_CAP`, the MVO path's
+`portfolio_volatility`, `hrp_candidate_vol`, and `portfolio_vol` — are
+**annualized**. The existing pipeline's `risk_score = portfolio_vol * 100`
+is therefore an annualized vol expressed as a percentage (a portfolio with
+risk_score ≈ 18 has ~18% annualized volatility). No unit conversions are
+required anywhere in this spec; the cap comparison
+`hrp_candidate_vol <= target_vol * HRP_VOL_TOLERANCE` is apples-to-apples.
 
 ### 4 — API exposure ([backend/app/schemas/portfolio.py](backend/app/schemas/portfolio.py))
 
@@ -246,8 +247,8 @@ Extend [backend/tests/test_pipeline_integration.py](backend/tests/test_pipeline_
 
 - **HRP wins path:** assert `weighting_method == "hrp"`,
   `optimizer_status is None`, `hrp_candidate_vol is not None`,
-  `0 < hrp_candidate_vol <= target_vol * 1.10`. (Do not assert
-  `hrp_candidate_vol == risk_score` — they are in different units; see §3a.)
+  `0 < hrp_candidate_vol <= target_vol * 1.10`, and
+  `abs(hrp_candidate_vol - risk_score / 100) < 1e-6` (same units; see §3a).
 - **MVO risk-cap fallback:** construct synthetic returns with high
   cross-correlation and high variance so HRP overshoots the cap. Assert
   `weighting_method == "mvo_risk_cap"`, `optimizer_status == "optimal"`,
@@ -283,9 +284,3 @@ Extend [backend/tests/test_pipeline_integration.py](backend/tests/test_pipeline_
   revisit only after observing real-world behavior.
 - **A/B comparison endpoint** returning both HRP and MVO side-by-side.
   Useful diagnostic, but not in this iteration.
-- **Annualizing `risk_score`** across both HRP and MVO paths. Today
-  `risk_score = port_vol * 100` where `port_vol` is daily. This makes the
-  reported "risk score" a small number (~1–2%) that doesn't match users'
-  intuition for portfolio volatility, and creates the unit asymmetry
-  documented in §3a. Fixing requires touching the existing MVO path and
-  the frontend's interpretation of the field — out of scope here.
