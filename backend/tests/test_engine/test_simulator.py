@@ -26,3 +26,39 @@ def test_monte_carlo_reasonable_values():
 
     assert 80_000 < result["percentile_50"] < 300_000
     assert result["percentile_10"] > 0
+
+
+def test_monte_carlo_is_deterministic_for_same_inputs():
+    weights = np.array([0.25, 0.25, 0.25, 0.25])
+    expected_returns = np.array([0.10, 0.12, 0.08, 0.11])
+    cov_matrix = np.eye(4) * 0.04
+
+    a = run_monte_carlo(
+        weights=weights, expected_returns=expected_returns, cov_matrix=cov_matrix,
+        initial_value=10_000.0, horizon_years=3.0, n_simulations=1_000,
+    )
+    b = run_monte_carlo(
+        weights=weights, expected_returns=expected_returns, cov_matrix=cov_matrix,
+        initial_value=10_000.0, horizon_years=3.0, n_simulations=1_000,
+    )
+
+    assert a["percentile_10"] == b["percentile_10"]
+    assert a["percentile_50"] == b["percentile_50"]
+    assert a["percentile_90"] == b["percentile_90"]
+
+
+def test_monte_carlo_changes_with_inputs():
+    weights = np.array([0.25, 0.25, 0.25, 0.25])
+    expected_returns = np.array([0.10, 0.12, 0.08, 0.11])
+    cov_matrix = np.eye(4) * 0.04
+
+    a = run_monte_carlo(
+        weights=weights, expected_returns=expected_returns, cov_matrix=cov_matrix,
+        initial_value=10_000.0, horizon_years=3.0, n_simulations=1_000,
+    )
+    b = run_monte_carlo(
+        weights=weights, expected_returns=expected_returns, cov_matrix=cov_matrix,
+        initial_value=20_000.0, horizon_years=3.0, n_simulations=1_000,
+    )
+
+    assert a["percentile_50"] != b["percentile_50"]

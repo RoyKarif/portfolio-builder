@@ -1,4 +1,37 @@
+import hashlib
+import json
+
 import numpy as np
+
+
+def _deterministic_seed(
+    weights,
+    expected_returns,
+    cov_matrix,
+    initial_value: float,
+    horizon_years: float,
+    n_simulations: int,
+) -> int:
+    """Derive a 32-bit seed from the simulator's actual inputs.
+
+    Assumes weights, expected_returns, and cov_matrix are aligned to a
+    single, deterministically ordered ticker set. The pipeline guarantees
+    this via its post-estimate_covariance realignment step
+    (see covariance-shrinkage Task 4).
+    """
+    payload = json.dumps(
+        {
+            "weights":          [round(float(w), 6) for w in weights],
+            "expected_returns": [round(float(r), 6) for r in expected_returns],
+            "cov_matrix":       [[round(float(c), 8) for c in row] for row in cov_matrix],
+            "initial_value":    round(float(initial_value), 4),
+            "horizon_years":    round(float(horizon_years), 4),
+            "n_simulations":    int(n_simulations),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return int.from_bytes(hashlib.sha256(payload.encode()).digest()[:4], "big")
 
 
 def run_monte_carlo(
@@ -15,8 +48,12 @@ def run_monte_carlo(
     daily_return = port_annual_return / 252
     daily_vol = port_annual_vol / np.sqrt(252)
 
-    np.random.seed(None)
-    random_returns = np.random.normal(daily_return, daily_vol, (n_simulations, trading_days))
+    seed = _deterministic_seed(
+        weights, expected_returns, cov_matrix,
+        initial_value, horizon_years, n_simulations,
+    )
+    rng = np.random.default_rng(seed=seed)
+    random_returns = rng.normal(daily_return, daily_vol, (n_simulations, trading_days))
     cumulative = np.cumprod(1 + random_returns, axis=1)
     final_values = initial_value * cumulative[:, -1]
 
