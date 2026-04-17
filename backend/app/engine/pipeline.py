@@ -2,8 +2,8 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import yfinance as yf
 
-from app.data.market import fetch_stock_data
 from app.engine.universe import select_universe
 from app.engine.predictor import predict_returns
 from app.engine.optimizer import optimize_portfolio
@@ -39,21 +39,32 @@ def generate_portfolio(
     if len(stocks) < 5:
         return {"error": "Not enough stocks found. Try broadening your sector selection."}
 
-    # Stage 2: ML Prediction
-    stocks = predict_returns(stocks, db=db)
-
     tickers = [s["ticker"] for s in stocks]
-    expected_rets = np.array([s["expected_return"] for s in stocks])
-
     end_date = datetime.utcnow().strftime("%Y-%m-%d")
-    start_date = (datetime.utcnow() - timedelta(days=2 * 365)).strftime("%Y-%m-%d")
+    start_date_3y = (datetime.utcnow() - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
+    cov_cutoff = (datetime.utcnow() - timedelta(days=2 * 365)).date()
+
+    # Single batch download covers both ML training (3yr) and cov matrix (2yr slice).
+    batch = yf.download(
+        tickers, start=start_date_3y, end=end_date,
+        progress=False, auto_adjust=True, group_by="ticker", threads=True,
+    )
+
+    # Stage 2: ML Prediction (reuses the batch above)
+    stocks = predict_returns(stocks, batch=batch, db=db)
 
     price_data = {}
     for ticker in tickers:
         try:
-            df = fetch_stock_data(ticker, start=start_date, end=end_date)
-            price_data[ticker] = df["Close"]
-        except Exception:
+            if isinstance(batch.columns, pd.MultiIndex):
+                close = batch[ticker]["Close"]
+            else:
+                close = batch["Close"]
+            close = close.dropna()
+            close = close[close.index.date >= cov_cutoff]
+            if len(close) > 0:
+                price_data[ticker] = close
+        except (KeyError, ValueError):
             continue
 
     valid_tickers = [t for t in tickers if t in price_data]
