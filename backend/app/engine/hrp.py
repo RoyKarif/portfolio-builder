@@ -55,16 +55,17 @@ def _quasi_diag(link: np.ndarray, n_leaves: int) -> list[int]:
     `link` is the (n-1) x 4 linkage matrix from scipy. Internal node ids
     are >= n_leaves; leaves are ids 0..n_leaves-1.
     """
-    link = link.astype(int)
-    # Start with the root cluster (last row of the linkage matrix)
-    ordered = [link[-1, 0], link[-1, 1]]
+    # Cast only columns 0 and 1 (the cluster IDs). Casting the whole
+    # matrix would silently truncate the distance column (col 2) to 0.
+    ids = link[:, :2].astype(int)
+    ordered = [int(ids[-1, 0]), int(ids[-1, 1])]
     while max(ordered) >= n_leaves:
         new_ordered = []
         for cluster_id in ordered:
             if cluster_id < n_leaves:
                 new_ordered.append(cluster_id)
             else:
-                row = link[cluster_id - n_leaves]
+                row = ids[cluster_id - n_leaves]
                 new_ordered.append(int(row[0]))
                 new_ordered.append(int(row[1]))
         ordered = new_ordered
