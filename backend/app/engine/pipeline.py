@@ -9,6 +9,7 @@ from app.engine.predictor import predict_returns
 from app.engine.optimizer import optimize_portfolio
 from app.engine.simulator import run_monte_carlo
 from app.engine.risk import estimate_covariance
+from app.engine.screens import apply_quality_screen
 
 HORIZON_YEARS = {
     "6m": 0.5,
@@ -55,21 +56,8 @@ def generate_portfolio(
     # Stage 2: ML Prediction (reuses the batch above)
     stocks = predict_returns(stocks, batch=batch, db=db)
 
-    price_data = {}
-    for ticker in tickers:
-        try:
-            if isinstance(batch.columns, pd.MultiIndex):
-                close = batch[ticker]["Close"]
-            else:
-                close = batch["Close"]
-            close = close.dropna()
-            close = close[close.index.date >= cov_cutoff]
-            if len(close) > 0:
-                price_data[ticker] = close
-        except (KeyError, ValueError):
-            continue
-
-    valid_tickers = [t for t in tickers if t in price_data]
+    price_data, dropped_by_screen = apply_quality_screen(batch, tickers, cov_cutoff)
+    valid_tickers = list(price_data.keys())
     if len(valid_tickers) < 5:
         return {"error": "Not enough historical data available."}
 
