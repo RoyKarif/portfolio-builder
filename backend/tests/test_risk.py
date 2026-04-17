@@ -71,3 +71,19 @@ def test_raises_on_non_numeric_column(synthetic_returns):
     df["A"] = "not a number"
     with pytest.raises(ValueError, match="numeric columns"):
         estimate_covariance(df)
+
+
+from unittest.mock import patch
+
+
+def test_fallback_on_sklearn_failure(synthetic_returns):
+    with patch("app.engine.risk.LedoitWolf") as mock_lw:
+        mock_lw.return_value.fit.side_effect = RuntimeError("boom")
+        cov, shrinkage, meta = estimate_covariance(synthetic_returns)
+    assert cov.shape == (5, 5)
+    assert shrinkage == 0.0
+    assert meta["method"] == "sample_fallback"
+    assert meta["fallback_used"] is True
+    assert "boom" in meta["fallback_reason"]
+    expected = synthetic_returns.cov().values * 252
+    assert np.allclose(cov, expected)

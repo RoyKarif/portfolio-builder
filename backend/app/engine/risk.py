@@ -51,9 +51,22 @@ def estimate_covariance(returns: pd.DataFrame) -> tuple[np.ndarray, float, dict]
         "fallback_reason": None,
     }
 
-    lw = LedoitWolf().fit(clean_returns.values)
-    daily_cov = lw.covariance_
-    shrinkage = float(lw.shrinkage_)
+    try:
+        lw = LedoitWolf().fit(clean_returns.values)
+        daily_cov = lw.covariance_
+        shrinkage = float(lw.shrinkage_)
+        if not np.all(np.isfinite(daily_cov)):
+            raise RuntimeError("LedoitWolf produced non-finite covariance")
+    except Exception as exc:
+        logger.warning(
+            "estimate_covariance fallback to sample cov: %s: %s",
+            type(exc).__name__, exc,
+        )
+        daily_cov = clean_returns.cov().values
+        shrinkage = 0.0
+        metadata["method"] = "sample_fallback"
+        metadata["fallback_used"] = True
+        metadata["fallback_reason"] = f"{type(exc).__name__}: {exc}"
 
     cov_matrix = daily_cov * TRADING_DAYS_PER_YEAR
 
