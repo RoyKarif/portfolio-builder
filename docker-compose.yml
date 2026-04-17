@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio}
       POSTGRES_DB: ${POSTGRES_DB:-portfolio_builder}
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -27,6 +27,9 @@ services:
       - redis
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql://portfolio:portfolio@db:5432/portfolio_builder
+      REDIS_URL: redis://redis:6379/0
 
   celery-worker:
     build: ./backend
@@ -38,6 +41,9 @@ services:
       - redis
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql://portfolio:portfolio@db:5432/portfolio_builder
+      REDIS_URL: redis://redis:6379/0
 
   celery-beat:
     build: ./backend
@@ -49,6 +55,9 @@ services:
       - redis
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql://portfolio:portfolio@db:5432/portfolio_builder
+      REDIS_URL: redis://redis:6379/0
 
 volumes:
   pgdata:

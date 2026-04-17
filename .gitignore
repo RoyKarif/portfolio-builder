@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.claude/
+venv/
+backend/venv/
+node_modules/
+celerybeat-schedule
+.DS_Store
