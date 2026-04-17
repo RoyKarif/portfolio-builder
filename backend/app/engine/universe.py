@@ -1,8 +1,6 @@
 from app.data.country_data import get_allowed_exchanges
 from app.data.market import fetch_stock_info
 
-VOLUME_THRESHOLD = 100_000
-
 
 def select_universe(
     country: str,
@@ -10,52 +8,73 @@ def select_universe(
     include_tickers: list[str],
     exclude_tickers: list[str],
 ) -> list[dict]:
-    allowed_exchanges = get_allowed_exchanges(country)
-    candidates = set(_get_sector_tickers(sectors))
-    candidates.update(include_tickers)
-    candidates -= set(exclude_tickers)
+    """Build the candidate stock universe.
+
+    yf.Sector already returns top US-listed companies in each sector, so we
+    trust those without per-ticker yfinance validation (which was causing
+    rate-limits → empty results). User-provided include_tickers are still
+    validated via fetch_stock_info so we have proper company names.
+    """
+    allowed_exchanges = set(get_allowed_exchanges(country))
+    excluded = set(exclude_tickers)
+    sector_tickers_with_meta = _get_sector_tickers_with_meta(sectors)
 
     result = []
-    for ticker in candidates:
-        info = fetch_stock_info(ticker)
-        if info.get("exchange", "") not in allowed_exchanges:
-            if ticker not in include_tickers:
-                continue
-        if ticker not in include_tickers and info.get("sector") not in sectors:
+    seen = set()
+    for entry in sector_tickers_with_meta:
+        ticker = entry["ticker"]
+        if ticker in excluded or ticker in seen:
             continue
-        if info.get("average_volume", 0) < VOLUME_THRESHOLD:
-            if ticker not in include_tickers:
-                continue
+        seen.add(ticker)
+        result.append(entry)
+
+    for ticker in include_tickers:
+        if ticker in excluded or ticker in seen:
+            continue
+        seen.add(ticker)
+        info = fetch_stock_info(ticker)
+        if info.get("exchange") and info["exchange"] not in allowed_exchanges:
+            continue
         result.append({
             "ticker": ticker,
             "company_name": info.get("company_name", ticker),
             "sector": info.get("sector", "Unknown"),
             "exchange": info.get("exchange", ""),
         })
+
     return result
 
 
-def _get_sector_tickers(sectors: list[str]) -> list[str]:
+SECTOR_MAP = {
+    "Technology": "technology",
+    "Healthcare": "healthcare",
+    "Energy": "energy",
+    "Finance": "financial-services",
+    "Consumer": "consumer-cyclical",
+    "Real Estate": "real-estate",
+    "Industrial": "industrials",
+}
+
+
+def _get_sector_tickers_with_meta(sectors: list[str]) -> list[dict]:
+    """Return top companies per sector with name + sector metadata from yfinance."""
     import yfinance as yf
-    sector_map = {
-        "Technology": "technology",
-        "Healthcare": "healthcare",
-        "Energy": "energy",
-        "Finance": "financial-services",
-        "Consumer": "consumer-cyclical",
-        "Real Estate": "real-estate",
-        "Industrial": "industrials",
-    }
-    tickers = []
+    out: list[dict] = []
     for sector in sectors:
-        yf_sector = sector_map.get(sector)
+        yf_sector = SECTOR_MAP.get(sector)
         if not yf_sector:
             continue
         try:
-            screener = yf.Sector(yf_sector)
-            top = screener.top_companies
-            if top is not None and not top.empty:
-                tickers.extend(top.index.tolist()[:30])
+            top = yf.Sector(yf_sector).top_companies
         except Exception:
             continue
-    return list(set(tickers))
+        if top is None or top.empty:
+            continue
+        for symbol, row in top.head(15).iterrows():
+            out.append({
+                "ticker": symbol,
+                "company_name": row.get("name", symbol),
+                "sector": sector,
+                "exchange": "",
+            })
+    return out

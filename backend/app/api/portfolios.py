@@ -40,6 +40,7 @@ def generate(
     if "error" in result:
         raise HTTPException(status_code=422, detail=result["error"])
 
+    sim = result["simulation"]
     portfolio = Portfolio(
         user_id=user.id,
         profile_id=profile.id,
@@ -47,7 +48,13 @@ def generate(
         risk_score=result["risk_score"],
         expected_return_low=result["expected_return_low"],
         expected_return_high=result["expected_return_high"],
+        portfolio_return=result["portfolio_return"],
         total_value=float(profile.available_amount),
+        percentile_10=sim["percentile_10"],
+        percentile_50=sim["percentile_50"],
+        percentile_90=sim["percentile_90"],
+        horizon_years=sim["horizon_years"],
+        n_simulations=sim["n_simulations"],
     )
     db.add(portfolio)
     db.flush()
@@ -120,7 +127,7 @@ def get_portfolio(
         risk_score=float(portfolio.risk_score),
         expected_return_low=float(portfolio.expected_return_low),
         expected_return_high=float(portfolio.expected_return_high),
-        portfolio_return=0.0,
+        portfolio_return=float(portfolio.portfolio_return) if portfolio.portfolio_return is not None else 0.0,
         total_value=float(portfolio.total_value),
         holdings=[
             HoldingResponse(
@@ -129,11 +136,14 @@ def get_portfolio(
             ) for h in holdings
         ],
         simulation=SimulationResponse(
-            percentile_10=0, percentile_50=0, percentile_90=0,
+            percentile_10=float(portfolio.percentile_10) if portfolio.percentile_10 is not None else 0.0,
+            percentile_50=float(portfolio.percentile_50) if portfolio.percentile_50 is not None else 0.0,
+            percentile_90=float(portfolio.percentile_90) if portfolio.percentile_90 is not None else 0.0,
             return_low=float(portfolio.expected_return_low) / 100,
             return_high=float(portfolio.expected_return_high) / 100,
             initial_value=float(portfolio.total_value),
-            horizon_years=0, n_simulations=0,
+            horizon_years=float(portfolio.horizon_years) if portfolio.horizon_years is not None else 0.0,
+            n_simulations=int(portfolio.n_simulations) if portfolio.n_simulations is not None else 0,
         ),
     )
 

@@ -2,9 +2,8 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import yfinance as yf
 from xgboost import XGBRegressor
-
-from app.data.market import fetch_stock_data, fetch_stock_info
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -21,30 +20,34 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     return features.dropna()
 
 
-def predict_returns(stocks: list[dict], db) -> list[dict]:
-    end_date = datetime.utcnow().strftime("%Y-%m-%d")
-    start_date = (datetime.utcnow() - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
+def predict_returns(stocks: list[dict], db, batch: pd.DataFrame | None = None) -> list[dict]:
+    if batch is None:
+        end_date = datetime.utcnow().strftime("%Y-%m-%d")
+        start_date = (datetime.utcnow() - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
+        tickers = [s["ticker"] for s in stocks]
+        batch = yf.download(
+            tickers, start=start_date, end=end_date,
+            progress=False, auto_adjust=True, group_by="ticker", threads=True,
+        )
 
     results = []
     for stock in stocks:
         ticker = stock["ticker"]
         try:
-            df = fetch_stock_data(ticker, start=start_date, end=end_date)
+            if isinstance(batch.columns, pd.MultiIndex):
+                df = batch[ticker].dropna(how="all")
+            else:
+                df = batch.dropna(how="all")
             if len(df) < 252:
                 stock["expected_return"] = 0.0
                 results.append(stock)
                 continue
 
-            info = fetch_stock_info(ticker)
             features = build_features(df)
 
             forward_return = df["Close"].pct_change(21).shift(-21)
             forward_return = forward_return.reindex(features.index).dropna()
             features = features.loc[forward_return.index]
-
-            features["pe_ratio"] = info.get("pe_ratio") or 0.0
-            features["pb_ratio"] = info.get("pb_ratio") or 0.0
-            features["dividend_yield"] = info.get("dividend_yield") or 0.0
 
             X = features.values
             y = forward_return.values
@@ -59,7 +62,11 @@ def predict_returns(stocks: list[dict], db) -> list[dict]:
 
             latest_features = X[-1:].copy()
             predicted_21d_return = float(model.predict(latest_features)[0])
+            # Cap 21-day prediction before annualizing (12x compounding amplifies outliers).
+            predicted_21d_return = max(-0.20, min(0.20, predicted_21d_return))
             annual_return = (1 + predicted_21d_return) ** (252 / 21) - 1
+            # Final safety clamp: annual returns outside [-50%, +100%] are unrealistic.
+            annual_return = max(-0.5, min(1.0, annual_return))
             stock["expected_return"] = round(annual_return, 4)
 
         except Exception:

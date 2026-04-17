@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Numeric, DateTime, ForeignKey
+from sqlalchemy import Integer, String, Numeric, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -18,7 +18,13 @@ class Portfolio(Base):
     risk_score: Mapped[float] = mapped_column(Numeric(5, 2))
     expected_return_low: Mapped[float] = mapped_column(Numeric(5, 2))
     expected_return_high: Mapped[float] = mapped_column(Numeric(5, 2))
+    portfolio_return: Mapped[float | None] = mapped_column(Numeric(7, 2), nullable=True)
     total_value: Mapped[float] = mapped_column(Numeric(14, 2))
+    percentile_10: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
+    percentile_50: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
+    percentile_90: Mapped[float | None] = mapped_column(Numeric(16, 2), nullable=True)
+    horizon_years: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    n_simulations: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user = relationship("User", back_populates="portfolios")
     profile = relationship("InvestmentProfile", back_populates="portfolios")

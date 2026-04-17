@@ -9,7 +9,9 @@ from app.models.market_data import MarketDataCache
 
 def fetch_stock_data(ticker: str, start: str, end: str) -> pd.DataFrame:
     """Fetch historical OHLCV data from yfinance."""
-    df = yf.download(ticker, start=start, end=end, progress=False)
+    df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(1)
     return df
 
 
