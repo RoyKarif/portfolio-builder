@@ -37,4 +37,7 @@ api.interceptors.response.use(
   }
 );
 
+export const deletePortfolio = (id: string) => api.delete(`/portfolios/${id}`);
+export const archivePortfolio = (id: string) => api.patch(`/portfolios/${id}/archive`);
+
 export default api;
