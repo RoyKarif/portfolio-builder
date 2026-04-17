@@ -163,3 +163,20 @@ def archive_portfolio(
     portfolio.status = "archived"
     db.commit()
     return {"id": str(portfolio.id), "status": "archived"}
+
+
+@router.delete("/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_portfolio(
+    portfolio_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    portfolio = db.query(Portfolio).filter(
+        Portfolio.id == portfolio_id,
+        Portfolio.user_id == user.id,
+    ).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    db.delete(portfolio)
+    db.commit()
+    return None

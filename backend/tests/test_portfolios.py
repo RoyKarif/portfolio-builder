@@ -57,3 +57,33 @@ def test_archive_portfolio(mock_engine, client, auth_headers):
     resp = client.patch(f"/portfolios/{portfolio_id}/archive", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["status"] == "archived"
+
+
+@patch("app.api.portfolios.generate_portfolio", return_value=MOCK_ENGINE_RESULT)
+def test_delete_portfolio(mock_engine, client, auth_headers):
+    profile_resp = client.post("/profiles", json=PROFILE_PAYLOAD, headers=auth_headers)
+    profile_id = profile_resp.json()["id"]
+    gen_resp = client.post(f"/portfolios/generate/{profile_id}", headers=auth_headers)
+    portfolio_id = gen_resp.json()["id"]
+
+    del_resp = client.delete(f"/portfolios/{portfolio_id}", headers=auth_headers)
+    assert del_resp.status_code == 204
+
+    get_resp = client.get(f"/portfolios/{portfolio_id}", headers=auth_headers)
+    assert get_resp.status_code == 404
+
+
+def test_delete_portfolio_not_found(client, auth_headers):
+    resp = client.delete("/portfolios/00000000-0000-0000-0000-000000000000", headers=auth_headers)
+    assert resp.status_code == 404
+
+
+@patch("app.api.portfolios.generate_portfolio", return_value=MOCK_ENGINE_RESULT)
+def test_delete_portfolio_requires_auth(mock_engine, client, auth_headers):
+    profile_resp = client.post("/profiles", json=PROFILE_PAYLOAD, headers=auth_headers)
+    profile_id = profile_resp.json()["id"]
+    gen_resp = client.post(f"/portfolios/generate/{profile_id}", headers=auth_headers)
+    portfolio_id = gen_resp.json()["id"]
+
+    resp = client.delete(f"/portfolios/{portfolio_id}")
+    assert resp.status_code in (401, 403)

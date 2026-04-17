@@ -28,8 +28,8 @@ class Portfolio(Base):
 
     user = relationship("User", back_populates="portfolios")
     profile = relationship("InvestmentProfile", back_populates="portfolios")
-    holdings = relationship("PortfolioHolding", back_populates="portfolio")
-    snapshots = relationship("PortfolioSnapshot", back_populates="portfolio")
+    holdings = relationship("PortfolioHolding", back_populates="portfolio", cascade="all, delete-orphan")
+    snapshots = relationship("PortfolioSnapshot", back_populates="portfolio", cascade="all, delete-orphan")
 
 
 class PortfolioHolding(Base):
