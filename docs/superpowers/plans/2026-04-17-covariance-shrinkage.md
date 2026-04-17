@@ -630,7 +630,9 @@ git commit -m "feat(api): expose covariance_method and shrinkage_intensity in ge
 **Files:**
 - Create: `backend/tests/test_pipeline_integration.py`
 
-This test exercises the real pipeline (no mocking of `generate_portfolio`) with a deterministic synthetic price panel injected at the `yfinance.download` boundary. It is the primary guard against the ticker-realignment bug and confirms the new fields flow end-to-end through the engine.
+This test exercises the real pipeline (no mocking of `generate_portfolio`) with a deterministic synthetic price panel injected at the `yfinance.download` boundary. It confirms the new fields flow end-to-end through the engine and that weight/allocation invariants still hold.
+
+Note on ticker realignment: `pipeline.py:57-82` already guarantees `returns_df` has no NaN (per-ticker `dropna`, then zero-observation filter, then `DataFrame(price_data).dropna()`). As a result, `estimate_covariance` will never find an all-NaN column given the current upstream filters, and the realignment branch at `pipeline.py:85-89` is **defense-in-depth** for a condition today's pipeline cannot produce. The branch is verified indirectly: `tests/test_risk.py::test_drops_all_nan_column` confirms `estimate_covariance` populates `dropped_tickers` correctly; `pipeline.py:87-89` is a straightforward list filter + length check. If a future change loosens the upstream filters, add a dedicated integration test for the realignment path at that point.
 
 - [ ] **Step 1: Write the integration test**
 
