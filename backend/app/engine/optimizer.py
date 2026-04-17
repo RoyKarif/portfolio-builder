@@ -9,6 +9,12 @@ RISK_VOLATILITY_CAP = {
     5: 0.35,
 }
 
+# Caveat: when the screened universe is exactly 5 tickers, the constraints
+# sum(w) == 1 and w_i <= 0.20 jointly force every w_i = 0.20, regardless of
+# risk_level or expected returns. The optimizer becomes a no-op equal-weight
+# allocator on that boundary. This is an accepted consequence of using the
+# weight cap as the de facto MIN_STOCKS enforcement; raising the upstream
+# >=5 ticker guard would change behavior for users with narrow universes.
 MAX_SINGLE_WEIGHT = 0.20
 
 # Enforced indirectly via MAX_SINGLE_WEIGHT: any feasible solution must
