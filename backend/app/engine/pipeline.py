@@ -82,12 +82,14 @@ def generate_portfolio(
     valid_returns = np.array([s["expected_return"] for s in valid_stocks])
 
     # Stage 3: Markowitz Optimization
+    # Note: profile.target_return is collected but not currently consumed
+    # by the optimizer. Field is preserved on the profile for a future
+    # "target return" feature.
     opt_result = optimize_portfolio(
         tickers=valid_tickers,
         expected_returns=valid_returns,
         cov_matrix=cov_matrix,
         risk_level=risk_level,
-        target_return=target_return,
     )
 
     # Stage 4: Monte Carlo Simulation

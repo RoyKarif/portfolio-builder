@@ -9,8 +9,13 @@ RISK_VOLATILITY_CAP = {
     5: 0.35,
 }
 
-MAX_SINGLE_WEIGHT = 0.30
+MAX_SINGLE_WEIGHT = 0.20
+
+# Enforced indirectly via MAX_SINGLE_WEIGHT: any feasible solution must
+# spread across at least 1 / MAX_SINGLE_WEIGHT = 5 names. CVXPY does not
+# support the cardinality constraint that would express this directly.
 MIN_STOCKS = 5
+
 MIN_WEIGHT_THRESHOLD = 0.02
 
 
@@ -19,7 +24,6 @@ def optimize_portfolio(
     expected_returns: np.ndarray,
     cov_matrix: np.ndarray,
     risk_level: int,
-    target_return: float,
 ) -> dict:
     n = len(tickers)
     max_vol = RISK_VOLATILITY_CAP.get(risk_level, 0.18)
