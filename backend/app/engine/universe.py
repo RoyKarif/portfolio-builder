@@ -2,11 +2,26 @@ from app.data.country_data import get_allowed_exchanges
 from app.data.market import fetch_stock_info
 
 
+DEFENSIVE_ETFS: list[dict] = [
+    {"ticker": "AGG", "company_name": "iShares Core US Aggregate Bond ETF",
+     "sector": "Bonds", "exchange": "", "is_defensive": True},
+    {"ticker": "IEF", "company_name": "iShares 7-10 Year Treasury Bond ETF",
+     "sector": "Bonds", "exchange": "", "is_defensive": True},
+    {"ticker": "GLD", "company_name": "SPDR Gold Trust",
+     "sector": "Commodities", "exchange": "", "is_defensive": True},
+    {"ticker": "XLU", "company_name": "Utilities Select Sector SPDR Fund",
+     "sector": "Utilities", "exchange": "", "is_defensive": True},
+    {"ticker": "XLP", "company_name": "Consumer Staples Select Sector SPDR Fund",
+     "sector": "Consumer Staples", "exchange": "", "is_defensive": True},
+]
+
+
 def select_universe(
     country: str,
     sectors: list[str],
     include_tickers: list[str],
     exclude_tickers: list[str],
+    risk_level: int,
 ) -> list[dict]:
     """Build the candidate stock universe.
 
@@ -14,6 +29,11 @@ def select_universe(
     trust those without per-ticker yfinance validation (which was causing
     rate-limits → empty results). User-provided include_tickers are still
     validated via fetch_stock_info so we have proper company names.
+
+    When risk_level <= 3, append a small fixed set of defensive ETFs to
+    the candidate universe (per the defensive-universe spec). Defensives
+    are appended, not replaced over user picks, and respect the user's
+    exclude_tickers and include_tickers.
     """
     allowed_exchanges = set(get_allowed_exchanges(country))
     excluded = set(exclude_tickers)
@@ -26,6 +46,7 @@ def select_universe(
         if ticker in excluded or ticker in seen:
             continue
         seen.add(ticker)
+        entry["is_defensive"] = False
         result.append(entry)
 
     for ticker in include_tickers:
@@ -40,7 +61,18 @@ def select_universe(
             "company_name": info.get("company_name", ticker),
             "sector": info.get("sector", "Unknown"),
             "exchange": info.get("exchange", ""),
+            "is_defensive": False,
         })
+
+    # Auto-inject defensive ETFs for conservative-to-moderate profiles.
+    # Appended to the existing selection; reuses `seen` and `excluded` so
+    # user-supplied includes aren't duplicated and excludes still win.
+    if risk_level <= 3:
+        for etf in DEFENSIVE_ETFS:
+            if etf["ticker"] in excluded or etf["ticker"] in seen:
+                continue
+            seen.add(etf["ticker"])
+            result.append(dict(etf))  # copy so callers can't mutate the constant
 
     return result
 

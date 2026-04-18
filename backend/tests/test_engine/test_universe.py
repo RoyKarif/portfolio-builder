@@ -1,45 +1,100 @@
 from unittest.mock import patch
 
-from app.engine.universe import select_universe
+from app.engine.universe import DEFENSIVE_ETFS, select_universe
 
 
 def _mock_fetch_info(ticker: str) -> dict:
     stock_db = {
-        "AAPL": {"company_name": "Apple", "sector": "Technology", "exchange": "NMS", "average_volume": 50_000_000},
-        "MSFT": {"company_name": "Microsoft", "sector": "Technology", "exchange": "NMS", "average_volume": 30_000_000},
-        "JNJ": {"company_name": "Johnson & Johnson", "sector": "Healthcare", "exchange": "NYSE", "average_volume": 8_000_000},
-        "XOM": {"company_name": "Exxon Mobil", "sector": "Energy", "exchange": "NYSE", "average_volume": 15_000_000},
-        "TEVA": {"company_name": "Teva", "sector": "Healthcare", "exchange": "TLV", "average_volume": 5_000_000},
-        "TINY": {"company_name": "TinyStock", "sector": "Technology", "exchange": "NMS", "average_volume": 1_000},
+        "AAPL": {"company_name": "Apple", "sector": "Technology", "exchange": "NMS"},
+        "MSFT": {"company_name": "Microsoft", "sector": "Technology", "exchange": "NMS"},
+        "JNJ": {"company_name": "J&J", "sector": "Healthcare", "exchange": "NYSE"},
     }
-    return stock_db.get(ticker, {"company_name": ticker, "sector": "Unknown", "exchange": "UNKNOWN", "average_volume": 0})
+    return stock_db.get(ticker, {"company_name": ticker, "sector": "Unknown", "exchange": "NMS"})
+
+
+def _mock_sector_tickers_with_meta(sectors: list[str]) -> list[dict]:
+    return [
+        {"ticker": "AAPL", "company_name": "Apple", "sector": "Technology", "exchange": ""},
+        {"ticker": "MSFT", "company_name": "Microsoft", "sector": "Technology", "exchange": ""},
+    ]
 
 
 @patch("app.engine.universe.fetch_stock_info", side_effect=_mock_fetch_info)
-@patch("app.engine.universe._get_sector_tickers", return_value=["AAPL", "MSFT", "JNJ", "XOM", "TEVA", "TINY"])
-def test_filter_by_country_us(mock_tickers, mock_info):
-    result = select_universe(country="US", sectors=["Technology", "Healthcare"], include_tickers=[], exclude_tickers=[])
-    tickers = [s["ticker"] for s in result]
+@patch("app.engine.universe._get_sector_tickers_with_meta", side_effect=_mock_sector_tickers_with_meta)
+def test_high_risk_level_excludes_defensives(mock_sect, mock_info):
+    result = select_universe(
+        country="US", sectors=["Technology"],
+        include_tickers=[], exclude_tickers=[], risk_level=4,
+    )
+    tickers = {s["ticker"] for s in result}
     assert "AAPL" in tickers
     assert "MSFT" in tickers
-    assert "JNJ" in tickers
-    assert "TEVA" not in tickers
-    assert "TINY" not in tickers
+    # Risk level 4 (and 5) must not see any defensive ETFs.
+    for etf in DEFENSIVE_ETFS:
+        assert etf["ticker"] not in tickers, f"{etf['ticker']} leaked into risk_level=4 universe"
 
 
 @patch("app.engine.universe.fetch_stock_info", side_effect=_mock_fetch_info)
-@patch("app.engine.universe._get_sector_tickers", return_value=["AAPL", "MSFT", "JNJ", "XOM", "TEVA", "TINY"])
-def test_include_exclude_tickers(mock_tickers, mock_info):
-    result = select_universe(country="US", sectors=["Technology"], include_tickers=["XOM"], exclude_tickers=["MSFT"])
-    tickers = [s["ticker"] for s in result]
-    assert "XOM" in tickers
-    assert "MSFT" not in tickers
+@patch("app.engine.universe._get_sector_tickers_with_meta", side_effect=_mock_sector_tickers_with_meta)
+def test_low_risk_level_appends_defensives(mock_sect, mock_info):
+    result = select_universe(
+        country="US", sectors=["Technology"],
+        include_tickers=[], exclude_tickers=[], risk_level=1,
+    )
+    tickers = {s["ticker"] for s in result}
+    # Sector picks are still there (append, not replace).
+    assert "AAPL" in tickers
+    assert "MSFT" in tickers
+    # All defensives present.
+    for etf in DEFENSIVE_ETFS:
+        assert etf["ticker"] in tickers, f"defensive {etf['ticker']} missing from risk_level=1 universe"
 
 
 @patch("app.engine.universe.fetch_stock_info", side_effect=_mock_fetch_info)
-@patch("app.engine.universe._get_sector_tickers", return_value=["AAPL", "MSFT", "JNJ"])
-def test_filter_by_sector(mock_tickers, mock_info):
-    result = select_universe(country="US", sectors=["Healthcare"], include_tickers=[], exclude_tickers=[])
+@patch("app.engine.universe._get_sector_tickers_with_meta", side_effect=_mock_sector_tickers_with_meta)
+def test_user_include_of_defensive_etf_does_not_duplicate(mock_sect, mock_info):
+    result = select_universe(
+        country="US", sectors=["Technology"],
+        include_tickers=["GLD"], exclude_tickers=[], risk_level=2,
+    )
     tickers = [s["ticker"] for s in result]
-    assert "JNJ" in tickers
-    assert "AAPL" not in tickers
+    # GLD should appear exactly once even though both include_tickers
+    # AND the auto-inject loop would normally add it.
+    assert tickers.count("GLD") == 1
+
+
+@patch("app.engine.universe.fetch_stock_info", side_effect=_mock_fetch_info)
+@patch("app.engine.universe._get_sector_tickers_with_meta", side_effect=_mock_sector_tickers_with_meta)
+def test_exclude_overrides_auto_inject(mock_sect, mock_info):
+    result = select_universe(
+        country="US", sectors=["Technology"],
+        include_tickers=[], exclude_tickers=["AGG"], risk_level=1,
+    )
+    tickers = {s["ticker"] for s in result}
+    # AGG was excluded by the user; auto-inject must respect that.
+    assert "AGG" not in tickers
+    # The other defensives are still added.
+    assert "IEF" in tickers
+    assert "GLD" in tickers
+    assert "XLU" in tickers
+    assert "XLP" in tickers
+
+
+@patch("app.engine.universe.fetch_stock_info", side_effect=_mock_fetch_info)
+@patch("app.engine.universe._get_sector_tickers_with_meta", side_effect=_mock_sector_tickers_with_meta)
+def test_is_defensive_flag_set_correctly(mock_sect, mock_info):
+    result = select_universe(
+        country="US", sectors=["Technology"],
+        include_tickers=[], exclude_tickers=[], risk_level=1,
+    )
+    by_ticker = {s["ticker"]: s for s in result}
+    # Regular sector picks have is_defensive=False.
+    assert by_ticker["AAPL"]["is_defensive"] is False
+    assert by_ticker["MSFT"]["is_defensive"] is False
+    # All defensives have is_defensive=True with stable sector labels.
+    expected_sectors = {"AGG": "Bonds", "IEF": "Bonds", "GLD": "Commodities",
+                        "XLU": "Utilities", "XLP": "Consumer Staples"}
+    for etf_ticker, expected_sector in expected_sectors.items():
+        entry = by_ticker[etf_ticker]
+        assert entry["is_defensive"] is True
+        assert entry["sector"] == expected_sector
