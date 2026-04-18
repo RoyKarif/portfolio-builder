@@ -153,3 +153,121 @@ def test_pipeline_drops_low_volume_ticker_from_holdings(mock_dl, mock_uni):
     assert "T0" not in tickers_in_result
     # The pipeline still produces a valid 5+ holding portfolio from T1..T9.
     assert len(result["holdings"]) >= 5
+
+
+@patch("app.engine.pipeline.select_universe", side_effect=_fake_universe)
+@patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download)
+def test_pipeline_hrp_wins_on_synthetic_data(mock_dl, mock_uni):
+    from app.engine.optimizer import RISK_VOLATILITY_CAP
+    from app.engine.pipeline import HRP_VOL_TOLERANCE
+
+    result = generate_portfolio(
+        country="US", risk_level=3, investment_horizon="3-5y",
+        available_amount=10_000.0, target_return=10.0,
+        preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
+        db=None,
+    )
+
+    assert "error" not in result, f"pipeline returned error: {result.get('error')}"
+    assert result["weighting_method"] == "hrp"
+    assert result["optimizer_status"] is None
+    assert result["hrp_candidate_vol"] is not None
+
+    target_vol = RISK_VOLATILITY_CAP[3]
+    assert 0 < result["hrp_candidate_vol"] <= target_vol * HRP_VOL_TOLERANCE
+
+    # When HRP wins, hrp_candidate_vol equals risk_score / 100 within rounding
+    # tolerance. risk_score is rounded to 2 decimals in pipeline.py
+    # (see "round(portfolio_vol * 100, 2)"), so the max delta is 5e-5.
+    assert abs(result["hrp_candidate_vol"] - result["risk_score"] / 100) < 1e-4
+
+
+def _fake_yf_download_high_vol(tickers, start, end, **kwargs):
+    """Synthetic prices with very high cross-correlation AND high vol so
+    HRP cannot diversify away enough variance — the candidate vol overshoots
+    the risk_level=1 cap (8% annualized) by more than HRP_VOL_TOLERANCE."""
+    rng = np.random.default_rng(seed=11)
+    n_days = 520
+    dates = pd.bdate_range(end=end, periods=n_days)
+    # One shared driver + tiny idiosyncratic noise => near-perfect correlation
+    common = rng.normal(0.0003, 0.05, n_days)  # ~5% daily vol => ~80% annualized
+    frames = []
+    for t in tickers:
+        idio = rng.normal(0.0, 0.001, n_days)
+        returns = common + idio
+        prices = 100.0 * np.cumprod(1 + returns)
+        df = pd.DataFrame(
+            {"Close": prices, "Volume": np.full(n_days, 1_000_000.0)},
+            index=dates,
+        )
+        frames.append(df)
+    return pd.concat(frames, axis=1, keys=tickers)
+
+
+@patch("app.engine.pipeline.select_universe", side_effect=_fake_universe)
+@patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download_high_vol)
+def test_pipeline_mvo_fallback_on_risk_cap_overshoot(mock_dl, mock_uni):
+    from app.engine.optimizer import RISK_VOLATILITY_CAP
+    from app.engine.pipeline import HRP_VOL_TOLERANCE
+
+    result = generate_portfolio(
+        country="US", risk_level=1, investment_horizon="3-5y",
+        available_amount=10_000.0, target_return=10.0,
+        preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
+        db=None,
+    )
+
+    assert "error" not in result, f"pipeline returned error: {result.get('error')}"
+    assert result["weighting_method"] in ("mvo_risk_cap", "fallback_equal_weight")
+    assert result["optimizer_status"] in ("optimal", "fallback_equal_weight")
+    assert result["hrp_candidate_vol"] is not None
+    assert result["hrp_candidate_vol"] > RISK_VOLATILITY_CAP[1] * HRP_VOL_TOLERANCE
+
+
+@patch("app.engine.pipeline.hrp_weights", side_effect=ValueError("forced for test"))
+@patch("app.engine.pipeline.select_universe", side_effect=_fake_universe)
+@patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download)
+def test_pipeline_hrp_error_fallback_to_mvo_optimal(mock_dl, mock_uni, mock_hrp):
+    result = generate_portfolio(
+        country="US", risk_level=3, investment_horizon="3-5y",
+        available_amount=10_000.0, target_return=10.0,
+        preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
+        db=None,
+    )
+
+    assert "error" not in result, f"pipeline returned error: {result.get('error')}"
+    assert result["weighting_method"] == "mvo_fallback_hrp_error"
+    assert result["optimizer_status"] == "optimal"
+    assert result["hrp_candidate_vol"] is None
+
+
+def _fake_optimize_equal_weight_fallback(tickers, expected_returns, cov_matrix, risk_level):
+    """Mock optimizer that always returns the equal-weight fallback path."""
+    n = len(tickers)
+    equal_w = np.ones(n) / n
+    return {
+        "weights": {t: round(float(w), 4) for t, w in zip(tickers, equal_w)},
+        "portfolio_return": float(expected_returns @ equal_w),
+        "portfolio_volatility": float(np.sqrt(equal_w @ cov_matrix @ equal_w)),
+        "status": "fallback_equal_weight",
+    }
+
+
+@patch("app.engine.pipeline.optimize_portfolio", side_effect=_fake_optimize_equal_weight_fallback)
+@patch("app.engine.pipeline.hrp_weights", side_effect=ValueError("forced for test"))
+@patch("app.engine.pipeline.select_universe", side_effect=_fake_universe)
+@patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download)
+def test_pipeline_hrp_error_fallback_to_mvo_equal_weight(mock_dl, mock_uni, mock_hrp, mock_opt):
+    result = generate_portfolio(
+        country="US", risk_level=3, investment_horizon="3-5y",
+        available_amount=10_000.0, target_return=10.0,
+        preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
+        db=None,
+    )
+
+    assert "error" not in result, f"pipeline returned error: {result.get('error')}"
+    # When MVO falls back to equal-weight, weighting_method collapses to
+    # the equal-weight string regardless of why we entered MVO.
+    assert result["weighting_method"] == "fallback_equal_weight"
+    assert result["optimizer_status"] == "fallback_equal_weight"
+    assert result["hrp_candidate_vol"] is None  # HRP raised before producing weights
