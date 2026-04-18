@@ -58,6 +58,16 @@ export default function MethodologyPage() {
           less sensitive to random quirks in the historical data. This is a well-established
           technique in professional portfolio construction.
         </p>
+        <p className="text-gray-700 mb-3">
+          By default we use a method called <strong>Hierarchical Risk Parity (HRP)</strong> — a
+          clustering-based approach that spreads risk across groups of stocks that tend to
+          move together. HRP tends to produce more stable, diversified portfolios than
+          classical mean-variance optimization, especially when the per-stock return
+          estimates are noisy. We measure the resulting portfolio volatility against your
+          risk profile's cap; if HRP overshoots by more than 10%, we fall back to
+          mean-variance optimization with the per-stock return estimates as a tighter
+          risk control.
+        </p>
       </section>
 
       <section id="risk" className="bg-white p-6 rounded-xl shadow mb-6">
