@@ -32,6 +32,9 @@ class PortfolioResponse(BaseModel):
     simulation: SimulationResponse
     covariance_method: str | None = None
     shrinkage_intensity: float | None = None
+    weighting_method: str | None = None
+    optimizer_status: str | None = None
+    hrp_candidate_vol: float | None = None
 
     model_config = {"from_attributes": True}
 
