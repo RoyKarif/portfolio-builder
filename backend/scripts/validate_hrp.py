@@ -34,7 +34,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.engine.hrp import hrp_weights
 from app.engine.optimizer import RISK_VOLATILITY_CAP, optimize_portfolio
-from app.engine.pipeline import HRP_VOL_TOLERANCE
+from app.engine.pipeline import (
+    HRP_LOWER_TOLERANCE,
+    HRP_TOLERANCE_EPSILON,
+    HRP_UPPER_TOLERANCE,
+)
 from app.engine.risk import estimate_covariance
 
 
@@ -104,12 +108,19 @@ def run_mvo(tickers, expected_returns, cov, risk_level) -> tuple[np.ndarray, str
 
 def hybrid_decision(hrp_vol, mvo_status, target_vol, hrp_error) -> str:
     """Replays the routing logic from app.engine.pipeline so we can label
-    each portfolio without invoking the full pipeline machinery."""
+    each portfolio without invoking the full pipeline machinery. Mirrors
+    the symmetric two-sided rule from P5."""
     if hrp_error is not None:
         return "fallback_equal_weight" if mvo_status == "fallback_equal_weight" else "mvo_fallback_hrp_error"
-    if hrp_vol <= target_vol * HRP_VOL_TOLERANCE:
+    lower_bound = target_vol * HRP_LOWER_TOLERANCE - HRP_TOLERANCE_EPSILON
+    upper_bound = target_vol * HRP_UPPER_TOLERANCE + HRP_TOLERANCE_EPSILON
+    if lower_bound <= hrp_vol <= upper_bound:
         return "hrp"
-    return "fallback_equal_weight" if mvo_status == "fallback_equal_weight" else "mvo_risk_cap"
+    if mvo_status == "fallback_equal_weight":
+        return "fallback_equal_weight"
+    if hrp_vol > upper_bound:
+        return "mvo_risk_cap"
+    return "mvo_underutilized"
 
 
 def run_synthetic_sweep(out_csv: Path):

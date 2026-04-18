@@ -22,9 +22,16 @@ HORIZON_YEARS = {
     "5y+": 7.0,
 }
 
-# Product decision, not a mathematical truth — accept HRP if it's within
-# 10% of the user's risk cap. Tune after observing real-world drift.
-HRP_VOL_TOLERANCE = 1.10
+# Product decisions, not mathematical truths — calibrated against observed
+# real-world routing behavior. HRP wins when its candidate vol sits inside
+# the band [cap × LOWER, cap × UPPER]; outside the band, MVO runs to honor
+# the cap (above) or to use more of the user's risk budget (below).
+HRP_UPPER_TOLERANCE = 1.10
+HRP_LOWER_TOLERANCE = 0.7
+# Small slack at the boundary so float-precision wobble doesn't produce
+# inconsistent routing. Biases toward HRP at the boundary — the default
+# behavior wins when the routing decision is genuinely indeterminate.
+HRP_TOLERANCE_EPSILON = 1e-9
 
 
 def generate_portfolio(
@@ -104,7 +111,15 @@ def generate_portfolio(
         # sqrt(w @ cov_matrix @ w) is annualized vol directly.
         hrp_candidate_vol = float(np.sqrt(hrp_arr @ cov_matrix @ hrp_arr))
 
-        if hrp_candidate_vol <= target_vol * HRP_VOL_TOLERANCE:
+        # Symmetric two-sided routing: HRP wins iff its candidate vol sits
+        # in [cap × LOWER, cap × UPPER]. Outside the band, MVO honors the
+        # cap (overshoot path) or uses more risk budget (underutilized path).
+        # Epsilon expands the band on both sides so FP precision near the
+        # boundary doesn't produce inconsistent routing.
+        lower_bound = target_vol * HRP_LOWER_TOLERANCE - HRP_TOLERANCE_EPSILON
+        upper_bound = target_vol * HRP_UPPER_TOLERANCE + HRP_TOLERANCE_EPSILON
+
+        if lower_bound <= hrp_candidate_vol <= upper_bound:
             weights_array = hrp_arr
             weighting_method = "hrp"
             portfolio_vol = hrp_candidate_vol
@@ -122,11 +137,15 @@ def generate_portfolio(
             # post-block assertion stays strict.
             weights_array = weights_array / weights_array.sum()
             optimizer_status = opt_result["status"]
-            weighting_method = (
-                "fallback_equal_weight"
-                if optimizer_status == "fallback_equal_weight"
-                else "mvo_risk_cap"
-            )
+            # Final routing reason depends on which side of the band we exited:
+            # above upper -> mvo_risk_cap, below lower -> mvo_underutilized.
+            # If the optimizer itself fell back, both collapse to fallback_equal_weight.
+            if optimizer_status == "fallback_equal_weight":
+                weighting_method = "fallback_equal_weight"
+            elif hrp_candidate_vol > upper_bound:
+                weighting_method = "mvo_risk_cap"
+            else:
+                weighting_method = "mvo_underutilized"
             portfolio_vol = opt_result["portfolio_volatility"]
             portfolio_return = opt_result["portfolio_return"]
     except ValueError as e:
@@ -156,7 +175,8 @@ def generate_portfolio(
             "hrp_candidate_vol": hrp_candidate_vol,
             "hrp_error": hrp_error,
             "target_vol": target_vol,
-            "tolerance": HRP_VOL_TOLERANCE,
+            "lower_tolerance": HRP_LOWER_TOLERANCE,
+            "upper_tolerance": HRP_UPPER_TOLERANCE,
             "weighting_method": weighting_method,
             "optimizer_status": optimizer_status,
         },

@@ -159,11 +159,16 @@ def test_pipeline_drops_low_volume_ticker_from_holdings(mock_dl, mock_uni):
 @patch("app.engine.pipeline.select_universe", side_effect=_fake_universe)
 @patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download)
 def test_pipeline_hrp_wins_on_synthetic_data(mock_dl, mock_uni):
+    # risk_level changed from 3 -> 1 to keep this test on the HRP-win path
+    # after P5's symmetric routing rule. The synthetic universe produces
+    # ~7% HRP candidate vol; only risk_level=1 (cap 8%) puts that inside
+    # the [LOWER × cap, UPPER × cap] HRP-wins band. At risk_level >= 2
+    # the new rule (correctly) routes to mvo_underutilized.
     from app.engine.optimizer import RISK_VOLATILITY_CAP
-    from app.engine.pipeline import HRP_VOL_TOLERANCE
+    from app.engine.pipeline import HRP_UPPER_TOLERANCE
 
     result = generate_portfolio(
-        country="US", risk_level=3, investment_horizon="3-5y",
+        country="US", risk_level=1, investment_horizon="3-5y",
         available_amount=10_000.0, target_return=10.0,
         preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
         db=None,
@@ -174,8 +179,8 @@ def test_pipeline_hrp_wins_on_synthetic_data(mock_dl, mock_uni):
     assert result["optimizer_status"] is None
     assert result["hrp_candidate_vol"] is not None
 
-    target_vol = RISK_VOLATILITY_CAP[3]
-    assert 0 < result["hrp_candidate_vol"] <= target_vol * HRP_VOL_TOLERANCE
+    target_vol = RISK_VOLATILITY_CAP[1]
+    assert 0 < result["hrp_candidate_vol"] <= target_vol * HRP_UPPER_TOLERANCE
 
     # When HRP wins, hrp_candidate_vol equals risk_score / 100 within rounding
     # tolerance. risk_score is rounded to 2 decimals in pipeline.py
@@ -209,7 +214,7 @@ def _fake_yf_download_high_vol(tickers, start, end, **kwargs):
 @patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download_high_vol)
 def test_pipeline_mvo_fallback_on_risk_cap_overshoot(mock_dl, mock_uni):
     from app.engine.optimizer import RISK_VOLATILITY_CAP
-    from app.engine.pipeline import HRP_VOL_TOLERANCE
+    from app.engine.pipeline import HRP_UPPER_TOLERANCE
 
     result = generate_portfolio(
         country="US", risk_level=1, investment_horizon="3-5y",
@@ -222,7 +227,7 @@ def test_pipeline_mvo_fallback_on_risk_cap_overshoot(mock_dl, mock_uni):
     assert result["weighting_method"] in ("mvo_risk_cap", "fallback_equal_weight")
     assert result["optimizer_status"] in ("optimal", "fallback_equal_weight")
     assert result["hrp_candidate_vol"] is not None
-    assert result["hrp_candidate_vol"] > RISK_VOLATILITY_CAP[1] * HRP_VOL_TOLERANCE
+    assert result["hrp_candidate_vol"] > RISK_VOLATILITY_CAP[1] * HRP_UPPER_TOLERANCE
 
 
 @patch("app.engine.pipeline.hrp_weights", side_effect=ValueError("forced for test"))
@@ -340,8 +345,13 @@ def _fake_universe_with_defensives(country, sectors, include_tickers, exclude_ti
 @patch("app.engine.pipeline.select_universe", side_effect=_fake_universe_with_defensives)
 @patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download)
 def test_pipeline_holdings_carry_is_defensive_flag(mock_dl, mock_uni):
+    # risk_level changed from 2 -> 1 to keep this test on the HRP-win path
+    # after P5's symmetric routing rule (see test_pipeline_hrp_wins_on_synthetic_data
+    # for the same rationale). At risk_level >= 2 the new rule routes to
+    # mvo_underutilized, where MVO might or might not preserve defensives
+    # depending on the predictor's expected returns.
     result = generate_portfolio(
-        country="US", risk_level=2, investment_horizon="3-5y",
+        country="US", risk_level=1, investment_horizon="3-5y",
         available_amount=10_000.0, target_return=10.0,
         preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
         db=None,
@@ -353,6 +363,47 @@ def test_pipeline_holdings_carry_is_defensive_flag(mock_dl, mock_uni):
         assert "is_defensive" in h, f"holding missing is_defensive: {h}"
         assert isinstance(h["is_defensive"], bool)
     # At least one defensive ETF is in the holdings (the synthetic universe
-    # plus risk_level=2 should make HRP put non-trivial weight on bonds).
+    # plus risk_level=1 should make HRP put non-trivial weight on bonds).
     defensive_holdings = [h for h in result["holdings"] if h["is_defensive"]]
-    assert len(defensive_holdings) > 0, "expected at least one defensive holding at risk_level=2"
+    assert len(defensive_holdings) > 0, "expected at least one defensive holding at risk_level=1"
+
+
+@patch("app.engine.pipeline.select_universe", side_effect=_fake_universe)
+@patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download)
+def test_pipeline_mvo_underutilized_routes_to_mvo_optimal(mock_dl, mock_uni):
+    """At risk_level=5 with the synthetic 10-ticker universe, HRP candidate
+    vol (~7%) sits well below cap × LOWER (0.7 × 35% = 24.5%). The new
+    symmetric rule must route to MVO with the underutilized label."""
+    result = generate_portfolio(
+        country="US", risk_level=5, investment_horizon="3-5y",
+        available_amount=10_000.0, target_return=10.0,
+        preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
+        db=None,
+    )
+
+    assert "error" not in result, f"pipeline returned error: {result.get('error')}"
+    assert result["weighting_method"] == "mvo_underutilized"
+    assert result["optimizer_status"] == "optimal"
+    assert result["hrp_candidate_vol"] is not None  # HRP did produce a candidate
+
+
+@patch("app.engine.pipeline.optimize_portfolio", side_effect=_fake_optimize_equal_weight_fallback)
+@patch("app.engine.pipeline.select_universe", side_effect=_fake_universe)
+@patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download)
+def test_pipeline_mvo_underutilized_with_optimizer_fallback(mock_dl, mock_uni, mock_opt):
+    """Same routing trigger as above, but the mocked optimizer returns its
+    equal-weight fallback. Verifies the equal-weight collapse semantics —
+    weighting_method reports the final outcome (not the entry path),
+    optimizer_status mirrors it, and hrp_candidate_vol stays populated
+    since HRP did produce a candidate before MVO was invoked."""
+    result = generate_portfolio(
+        country="US", risk_level=5, investment_horizon="3-5y",
+        available_amount=10_000.0, target_return=10.0,
+        preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
+        db=None,
+    )
+
+    assert "error" not in result, f"pipeline returned error: {result.get('error')}"
+    assert result["weighting_method"] == "fallback_equal_weight"
+    assert result["optimizer_status"] == "fallback_equal_weight"
+    assert result["hrp_candidate_vol"] is not None  # HRP did produce a candidate
