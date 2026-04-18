@@ -21,10 +21,19 @@ export default function MethodologyPage() {
 
       <section id="stocks" className="bg-white p-6 rounded-xl shadow mb-6">
         <h2 className="text-2xl font-bold mb-3">Choosing Stocks</h2>
-        <p className="text-gray-700">
+        <p className="text-gray-700 mb-3">
           We start with a universe of well-known, liquid companies listed on major exchanges in your selected country.
           From that pool, we focus on the sectors you're interested in — Technology, Healthcare, and so on.
           You can also add specific tickers you want included, or exclude any you'd rather avoid.
+        </p>
+        <p className="text-gray-700">
+          <strong>Defensive assets for conservative profiles.</strong> If you pick a conservative-to-moderate
+          risk level (1, 2, or 3), we automatically add a small set of defensive assets to your portfolio's
+          candidate pool: broad investment-grade bonds (AGG), intermediate Treasuries (IEF), gold (GLD), and
+          defensive equity (utilities XLU and consumer staples XLP). These don't replace your sector choices —
+          they're added alongside them, giving the optimizer the option to use them when a low risk cap requires
+          reducing volatility. Higher risk profiles (4 and 5) don't include them automatically, since they
+          conflict with an aggressive growth target.
         </p>
       </section>
 
