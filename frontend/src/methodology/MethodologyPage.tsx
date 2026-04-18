@@ -72,10 +72,11 @@ export default function MethodologyPage() {
           clustering-based approach that spreads risk across groups of stocks that tend to
           move together. HRP tends to produce more stable, diversified portfolios than
           classical mean-variance optimization, especially when the per-stock return
-          estimates are noisy. We measure the resulting portfolio volatility against your
-          risk profile's cap; if HRP overshoots by more than 10%, we fall back to
-          mean-variance optimization with the per-stock return estimates as a tighter
-          risk control.
+          estimates are noisy. We then check whether HRP's portfolio matches your chosen
+          risk level. If HRP comes out much riskier than your profile allows, we fall back
+          to mean-variance optimization to bring volatility down. If HRP comes out much
+          more conservative than your profile, we likewise fall back to mean-variance
+          optimization so the portfolio better matches the risk level you selected.
         </p>
       </section>
 
