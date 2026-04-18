@@ -271,3 +271,41 @@ def test_pipeline_hrp_error_fallback_to_mvo_equal_weight(mock_dl, mock_uni, mock
     assert result["weighting_method"] == "fallback_equal_weight"
     assert result["optimizer_status"] == "fallback_equal_weight"
     assert result["hrp_candidate_vol"] is None  # HRP raised before producing weights
+
+
+def _fake_universe_30(country, sectors, include_tickers, exclude_tickers):
+    return [
+        {"ticker": f"T{i:02d}", "company_name": f"Co{i}", "sector": "Technology", "exchange": ""}
+        for i in range(30)
+    ]
+
+
+@patch("app.engine.pipeline.select_universe", side_effect=_fake_universe_30)
+@patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download_high_vol)
+def test_pipeline_mvo_fallback_weights_sum_to_one_with_large_universe(mock_dl, mock_uni):
+    """Regression: optimize_portfolio rounds weights to 4 decimals before
+    returning, so naively pulling them into weights_array can produce a sum
+    that drifts by up to n × 5e-5. With a small (10-ticker) universe and
+    equal weights, rounding happens to be exact, so earlier tests didn't
+    catch it. This test forces the cap-overshoot path at n=30, which is
+    where the assertion `< 1e-8` would have fired before the renormalize fix."""
+    result = generate_portfolio(
+        country="US", risk_level=1, investment_horizon="3-5y",
+        available_amount=10_000.0, target_return=10.0,
+        preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
+        db=None,
+    )
+
+    assert "error" not in result, f"pipeline returned error: {result.get('error')}"
+    # Most important: the pipeline didn't blow up on the strict sum assertion.
+    # If we got here, weights_array.sum() was within 1e-8 of 1.0.
+    assert result["weighting_method"] in (
+        "mvo_risk_cap",
+        "fallback_equal_weight",
+    ), f"unexpected weighting_method: {result['weighting_method']}"
+
+    # Holdings allocations come from the renormalized weights, so the
+    # displayed allocation_pcts should sum to ~100 (allowing for the
+    # round-to-2-decimals display rounding and the <1% display filter).
+    total_alloc = sum(h["allocation_pct"] for h in result["holdings"])
+    assert abs(total_alloc - 100.0) < 0.5, f"allocations sum to {total_alloc}"

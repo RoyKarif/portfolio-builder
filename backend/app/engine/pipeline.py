@@ -116,6 +116,10 @@ def generate_portfolio(
                 risk_level=risk_level,
             )
             weights_array = np.array([opt_result["weights"].get(t, 0) for t in valid_tickers])
+            # optimize_portfolio rounds weights to 4 decimals before returning,
+            # so the sum can drift by up to n × 5e-5. Renormalize so the
+            # post-block assertion stays strict.
+            weights_array = weights_array / weights_array.sum()
             optimizer_status = opt_result["status"]
             weighting_method = (
                 "fallback_equal_weight"
@@ -133,6 +137,7 @@ def generate_portfolio(
             risk_level=risk_level,
         )
         weights_array = np.array([opt_result["weights"].get(t, 0) for t in valid_tickers])
+        weights_array = weights_array / weights_array.sum()  # see comment above
         optimizer_status = opt_result["status"]
         weighting_method = (
             "fallback_equal_weight"
