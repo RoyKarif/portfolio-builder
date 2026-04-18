@@ -26,9 +26,10 @@ def _fake_yf_download(tickers, start, end, **kwargs):
     return result
 
 
-def _fake_universe(country, sectors, include_tickers, exclude_tickers):
+def _fake_universe(country, sectors, include_tickers, exclude_tickers, risk_level):
     return [
-        {"ticker": f"T{i}", "company_name": f"Co{i}", "sector": "Technology", "exchange": ""}
+        {"ticker": f"T{i}", "company_name": f"Co{i}", "sector": "Technology",
+         "exchange": "", "is_defensive": False}
         for i in range(10)
     ]
 
@@ -273,9 +274,10 @@ def test_pipeline_hrp_error_fallback_to_mvo_equal_weight(mock_dl, mock_uni, mock
     assert result["hrp_candidate_vol"] is None  # HRP raised before producing weights
 
 
-def _fake_universe_30(country, sectors, include_tickers, exclude_tickers):
+def _fake_universe_30(country, sectors, include_tickers, exclude_tickers, risk_level):
     return [
-        {"ticker": f"T{i:02d}", "company_name": f"Co{i}", "sector": "Technology", "exchange": ""}
+        {"ticker": f"T{i:02d}", "company_name": f"Co{i}", "sector": "Technology",
+         "exchange": "", "is_defensive": False}
         for i in range(30)
     ]
 
@@ -309,3 +311,48 @@ def test_pipeline_mvo_fallback_weights_sum_to_one_with_large_universe(mock_dl, m
     # round-to-2-decimals display rounding and the <1% display filter).
     total_alloc = sum(h["allocation_pct"] for h in result["holdings"])
     assert abs(total_alloc - 100.0) < 0.5, f"allocations sum to {total_alloc}"
+
+
+def _fake_universe_with_defensives(country, sectors, include_tickers, exclude_tickers, risk_level):
+    """Mock universe selector that mirrors the real one's auto-inject
+    behavior: 10 fake stocks always, plus 5 defensive ETFs when risk_level <= 3."""
+    stocks = [
+        {"ticker": f"T{i}", "company_name": f"Co{i}", "sector": "Technology",
+         "exchange": "", "is_defensive": False}
+        for i in range(10)
+    ]
+    if risk_level <= 3:
+        stocks.extend([
+            {"ticker": "AGG", "company_name": "iShares Core US Aggregate Bond ETF",
+             "sector": "Bonds", "exchange": "", "is_defensive": True},
+            {"ticker": "IEF", "company_name": "iShares 7-10 Year Treasury Bond ETF",
+             "sector": "Bonds", "exchange": "", "is_defensive": True},
+            {"ticker": "GLD", "company_name": "SPDR Gold Trust",
+             "sector": "Commodities", "exchange": "", "is_defensive": True},
+            {"ticker": "XLU", "company_name": "Utilities Select Sector SPDR Fund",
+             "sector": "Utilities", "exchange": "", "is_defensive": True},
+            {"ticker": "XLP", "company_name": "Consumer Staples Select Sector SPDR Fund",
+             "sector": "Consumer Staples", "exchange": "", "is_defensive": True},
+        ])
+    return stocks
+
+
+@patch("app.engine.pipeline.select_universe", side_effect=_fake_universe_with_defensives)
+@patch("app.engine.pipeline.yf.download", side_effect=_fake_yf_download)
+def test_pipeline_holdings_carry_is_defensive_flag(mock_dl, mock_uni):
+    result = generate_portfolio(
+        country="US", risk_level=2, investment_horizon="3-5y",
+        available_amount=10_000.0, target_return=10.0,
+        preferred_sectors=["Technology"], include_tickers=[], exclude_tickers=[],
+        db=None,
+    )
+
+    assert "error" not in result, f"pipeline returned error: {result.get('error')}"
+    # Every holding must have the is_defensive field populated.
+    for h in result["holdings"]:
+        assert "is_defensive" in h, f"holding missing is_defensive: {h}"
+        assert isinstance(h["is_defensive"], bool)
+    # At least one defensive ETF is in the holdings (the synthetic universe
+    # plus risk_level=2 should make HRP put non-trivial weight on bonds).
+    defensive_holdings = [h for h in result["holdings"] if h["is_defensive"]]
+    assert len(defensive_holdings) > 0, "expected at least one defensive holding at risk_level=2"

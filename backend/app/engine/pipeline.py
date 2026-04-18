@@ -44,6 +44,7 @@ def generate_portfolio(
         sectors=preferred_sectors,
         include_tickers=include_tickers,
         exclude_tickers=exclude_tickers,
+        risk_level=risk_level,
     )
 
     if len(stocks) < 5:
@@ -184,6 +185,7 @@ def generate_portfolio(
             "sector": stock["sector"],
             "allocation_pct": round(w * 100, 2),
             "expected_return": round(stock["expected_return"] * 100, 2),
+            "is_defensive": stock.get("is_defensive", False),
         })
 
     return {
