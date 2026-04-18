@@ -85,6 +85,9 @@ def generate(
         simulation=SimulationResponse(**result["simulation"]),
         covariance_method=result.get("covariance_method"),
         shrinkage_intensity=result.get("shrinkage_intensity"),
+        weighting_method=result.get("weighting_method"),
+        optimizer_status=result.get("optimizer_status"),
+        hrp_candidate_vol=result.get("hrp_candidate_vol"),
     )
 
 
