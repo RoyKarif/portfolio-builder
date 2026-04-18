@@ -138,6 +138,7 @@ def get_portfolio(
             HoldingResponse(
                 ticker=h.ticker, company_name=h.company_name, sector=h.sector,
                 allocation_pct=float(h.allocation_pct), expected_return=float(h.expected_return),
+                is_defensive=getattr(h, "is_defensive", False),
             ) for h in holdings
         ],
         simulation=SimulationResponse(

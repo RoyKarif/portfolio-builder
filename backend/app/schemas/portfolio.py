@@ -7,6 +7,7 @@ class HoldingResponse(BaseModel):
     sector: str
     allocation_pct: float
     expected_return: float
+    is_defensive: bool = False
 
 
 class SimulationResponse(BaseModel):
