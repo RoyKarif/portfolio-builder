@@ -246,12 +246,28 @@ def print_concentration(rows):
     print()
 
 
+DEFENSIVE_TICKERS = {"AGG", "IEF", "GLD", "XLU", "XLP"}
+
+
+def _portfolio_l1_distance(p_a: dict, p_b: dict) -> float:
+    """L1 distance between two portfolios' weight vectors over the union
+    of their tickers. Each input is {ticker: weight_pct}."""
+    tickers = set(p_a) | set(p_b)
+    return sum(abs(p_a.get(t, 0.0) - p_b.get(t, 0.0)) for t in tickers) / 100.0
+
+
+def _defensive_share(holdings: list[dict]) -> float:
+    """Share of total weight held in defensive ETFs (as a fraction)."""
+    return sum(h["allocation_pct"] for h in holdings if h["ticker"] in DEFENSIVE_TICKERS) / 100.0
+
+
 def run_real_data_spot_check():
     print("=" * 64)
     print("TABLE 4 — Real-data spot check (live yfinance, 5 portfolios)")
     print("=" * 64)
     from app.engine.pipeline import generate_portfolio
 
+    runs: dict[int, dict] = {}
     for risk_level in [1, 2, 3, 4, 5]:
         try:
             result = generate_portfolio(
@@ -273,17 +289,79 @@ def run_real_data_spot_check():
             print(f"risk_level={risk_level}: ERROR — {result['error']}")
             continue
 
+        runs[risk_level] = result
         n_holdings = len(result["holdings"])
         top_3 = sorted(result["holdings"], key=lambda h: -h["allocation_pct"])[:3]
-        top_str = ", ".join(f"{h['ticker']}({h['allocation_pct']:.1f}%)" for h in top_3)
+        top_str = ", ".join(
+            f"{h['ticker']}{'*' if h.get('is_defensive') else ''}({h['allocation_pct']:.1f}%)"
+            for h in top_3
+        )
         hrp_cand = result.get("hrp_candidate_vol")
         hrp_cand_str = f"{hrp_cand:.4f}" if hrp_cand is not None else "n/a"
+        defensive = _defensive_share(result["holdings"])
         print(
             f"risk_level={risk_level} method={result['weighting_method']:<22} "
-            f"risk_score={result['risk_score']:>5.2f} "
-            f"hrp_cand={hrp_cand_str:>7} n_holdings={n_holdings:>2}"
+            f"risk_score={result['risk_score']:>5.2f} hrp_cand={hrp_cand_str:>7} "
+            f"n_holdings={n_holdings:>2} defensive_share={defensive*100:>5.1f}%"
         )
-        print(f"               top 3: {top_str}")
+        print(f"               top 3 (* = defensive): {top_str}")
+    print()
+
+    print("=" * 64)
+    print("TABLE 5 — Success criteria (defensive universe, spec §5)")
+    print("=" * 64)
+    if not all(rl in runs for rl in [1, 2, 3, 4, 5]):
+        print("SKIP — not all 5 risk levels produced a portfolio (see errors above)")
+        return
+
+    # Extract weight vectors as {ticker: pct} for each risk level.
+    pf = {
+        rl: {h["ticker"]: h["allocation_pct"] for h in runs[rl]["holdings"]}
+        for rl in [1, 2, 3, 4, 5]
+    }
+
+    # Criterion 1: no equal-weight collapse on risk levels 1-3.
+    methods_1_3 = {rl: runs[rl]["weighting_method"] for rl in [1, 2, 3]}
+    crit1_pass = all(m in {"hrp", "mvo_risk_cap"} for m in methods_1_3.values())
+    print(f"  [1] No equal-weight collapse on risk_level 1-3:  {'PASS' if crit1_pass else 'FAIL'}")
+    print(f"      methods: {methods_1_3}")
+
+    # Criterion 2: risk-level differentiation (1 vs 2, 2 vs 3, 1 vs 3).
+    pairs = [(1, 2), (2, 3), (1, 3)]
+    deltas = {p: _portfolio_l1_distance(pf[p[0]], pf[p[1]]) for p in pairs}
+    # Threshold calibrated empirically; spec leaves it open. Use 0.10 as a
+    # conservative starting point — anything below that suggests the slider
+    # isn't doing much, well above means the algorithm is responding to risk_level.
+    crit2_pass = sum(1 for d in deltas.values() if d > 0.10) >= 2
+    print(f"  [2] Risk-level differentiation (>=2 of 3 pairs L1>0.10):  {'PASS' if crit2_pass else 'FAIL'}")
+    for p, d in deltas.items():
+        print(f"      L1(risk={p[0]}, risk={p[1]}) = {d:.3f}")
+
+    # Criterion 3: defensive allocation present at risk_level 1 (>= 30%).
+    def_share_1 = _defensive_share(runs[1]["holdings"])
+    crit3_pass = def_share_1 >= 0.30
+    print(f"  [3] Defensive share at risk_level=1 >= 30%:  {'PASS' if crit3_pass else 'FAIL'}")
+    print(f"      observed: {def_share_1*100:.1f}%")
+
+    # Criterion 4: defensive monotonicity across risk levels 1-3 (allow <5pp inversion).
+    shares_1_3 = [_defensive_share(runs[rl]["holdings"]) for rl in [1, 2, 3]]
+    crit4_pass = (shares_1_3[0] >= shares_1_3[1] - 0.05) and (shares_1_3[1] >= shares_1_3[2] - 0.05)
+    print(f"  [4] Defensive monotonicity (1 >= 2 >= 3, +/-5pp slack):  {'PASS' if crit4_pass else 'FAIL'}")
+    print(f"      shares: risk_1={shares_1_3[0]*100:.1f}%, risk_2={shares_1_3[1]*100:.1f}%, risk_3={shares_1_3[2]*100:.1f}%")
+
+    # Criterion 5: no defensives in risk levels 4 or 5.
+    crit5_pass = all(
+        all(not h.get("is_defensive", False) for h in runs[rl]["holdings"])
+        for rl in [4, 5]
+    )
+    print(f"  [5] No defensives in risk_level 4 or 5:  {'PASS' if crit5_pass else 'FAIL'}")
+    for rl in [4, 5]:
+        defensives_present = [h["ticker"] for h in runs[rl]["holdings"] if h.get("is_defensive", False)]
+        print(f"      risk_level={rl} defensive holdings: {defensives_present or 'none'}")
+
+    print()
+    n_pass = sum([crit1_pass, crit2_pass, crit3_pass, crit4_pass, crit5_pass])
+    print(f"  OVERALL: {n_pass}/5 success criteria passing")
     print()
 
 
