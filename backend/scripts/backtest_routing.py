@@ -1,10 +1,15 @@
 """Walk-forward backtest of HRP / MVO / hybrid / equal-weight on realized returns.
 
-Pulls ~7 years of daily prices for a fixed universe (top US tech +
-defensive ETFs). Annual rebalancing: at each year-start, fit cov + μ
-on the trailing 2-year window, run each strategy to produce weights,
-evaluate the weights on the next 1-year window. Aggregate per-strategy
-and per-risk-level metrics across all eval windows.
+Quarterly rebalancing on a 35-ticker multi-sector universe (top US tech,
+healthcare, energy, finance, consumer, industrial + 5 defensive ETFs)
+across two distinct 4-year windows (2016-2019 and 2021-2024). Compares
+4 strategies at 3 risk levels.
+
+For each rebalance: fit cov + μ on the trailing 2-year window, run each
+strategy to produce weights, hold those weights until the next rebalance.
+Each strategy's daily return stream is the concatenation of (held weights
+× asset returns) over the entire window. Metrics are computed on the
+continuous stream.
 
 Strategies (per risk level 1, 3, 5):
 - equal_weight: 1/N baseline (independent of risk_level)
@@ -12,27 +17,28 @@ Strategies (per risk level 1, 3, 5):
 - mvo_only:    pure MVO at the given risk_level cap
 - hybrid:      full P5 routing logic (HRP within band, MVO outside)
 
-Metrics per (strategy, risk_level):
+Metrics per (strategy, risk_level), reported per window AND combined:
 - Annualized return (geometric)
 - Annualized vol (realized)
 - Sharpe (rf = 0)
 - Max drawdown
-- For hybrid: routing distribution across rebalances
+- For hybrid: routing distribution across rebalances (combined)
 
-Caveats (deliberately accepted for v1):
-- Sample-mean expected returns for MVO. Using the production XGBoost
-  predictor would introduce training-data leakage in a backtest. HRP
-  doesn't use μ so isn't affected.
-- No transaction costs (annual rebalance keeps costs small but non-zero).
-- Fixed universe; no point-in-time membership adjustment.
-- Single universe (US tech + defensives).
-- Annual rebalancing (5 obs per strategy).
+Caveats (deliberately accepted for v1 of the rich backtest):
+- Sample-mean expected returns for MVO. Production XGBoost predictor
+  walk-forward retraining is the next phase. Sample mean isolates the
+  universe / cadence / regime variables from the μ-source variable.
+- No transaction costs (quarterly rebalance has more friction than
+  P6's annual but still small relative to absolute returns).
+- Fixed universe; no point-in-time membership adjustment (survivorship
+  bias toward currently-known names).
+- 2020 deliberately excluded from both windows (anomalous COVID crash
+  + recovery in a single year).
 
 Usage:
     cd backend && python scripts/backtest_routing.py
 """
 import sys
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -51,22 +57,43 @@ from app.engine.pipeline import (
 from app.engine.risk import estimate_covariance
 
 
+# 35 tickers across 6 sectors + 5 defensive ETFs.
+# Curated for liquidity and history back to 2014.
 UNIVERSE = [
-    "MSFT", "AAPL", "NVDA", "GOOGL", "AMZN", "META", "TSLA",
-    "AVGO", "CSCO", "IBM",
+    # Tech (5)
+    "MSFT", "AAPL", "NVDA", "GOOGL", "AMZN",
+    # Healthcare (5)
+    "JNJ", "UNH", "LLY", "MRK", "PFE",
+    # Energy (5)
+    "XOM", "CVX", "COP", "SLB", "OXY",
+    # Finance (5)
+    "JPM", "BAC", "WFC", "GS", "BLK",
+    # Consumer (5)
+    "HD", "NKE", "MCD", "SBUX", "LOW",
+    # Industrial (5)
+    "BA", "CAT", "HON", "UPS", "RTX",
+    # Defensive ETFs (5) — per P4
     "AGG", "IEF", "GLD", "XLU", "XLP",
 ]
 
+# Two 4-year evaluation windows (16 quarterly rebalances each).
+# 2-year trailing window used for fitting at each rebalance, so data
+# fetch needs to start 2 years before the earliest window.
+WINDOWS = [
+    ("2016-01-01", "2019-12-31"),  # pre-pandemic
+    ("2021-01-01", "2024-12-31"),  # post-COVID + 2022 drawdown
+]
+DATA_FETCH_START = "2014-01-01"
+DATA_FETCH_END = "2024-12-31"
+
 RISK_LEVELS = [1, 3, 5]
 TRAINING_WINDOW_YEARS = 2
-EVAL_WINDOW_DAYS = 252
 TRADING_DAYS = 252
-TOTAL_HISTORY_YEARS = 7  # 5 years of evaluation + 2-year initial training window
 
 
-def fetch_prices(tickers: list[str], start: datetime, end: datetime) -> pd.DataFrame:
+def fetch_prices(tickers: list[str], start: str, end: str) -> pd.DataFrame:
     """Returns DataFrame of close prices indexed by date, columns=tickers.
-    Drops any ticker without full coverage over the window."""
+    Drops any ticker without ≥95% coverage over the window."""
     data = yf.download(
         tickers, start=start, end=end,
         progress=False, auto_adjust=True, group_by="ticker", threads=True,
@@ -81,12 +108,12 @@ def fetch_prices(tickers: list[str], start: datetime, end: datetime) -> pd.DataF
             continue
         closes[t] = close
     df = pd.DataFrame(closes)
-    # Drop tickers with significantly less coverage than the longest column
+    if df.empty:
+        return df
     n_max = df.notna().sum().max()
     coverage = df.notna().sum() / n_max
     keep = coverage[coverage >= 0.95].index
-    df = df[keep]
-    df = df.dropna()
+    df = df[keep].dropna()
     return df
 
 
@@ -103,10 +130,13 @@ def hybrid_route(hrp_vol: float, mvo_status: str, target_vol: float) -> str:
     return "mvo_underutilized"
 
 
-def run_strategies(returns_train: pd.DataFrame, risk_level: int) -> dict:
-    """Compute weights for all 4 strategies at this rebalance."""
-    cov, _, cov_meta = estimate_covariance(returns_train)
-    # estimate_covariance may drop tickers with all-NaN columns; align tickers.
+def run_strategies(returns_train: pd.DataFrame, risk_level: int) -> dict | None:
+    """Compute weights for all 4 strategies at this rebalance. Returns
+    None if the universe at this point is too small to backtest."""
+    try:
+        cov, _, cov_meta = estimate_covariance(returns_train)
+    except Exception:
+        return None
     valid_tickers = [t for t in returns_train.columns if t not in cov_meta["dropped_tickers"]]
     if len(valid_tickers) < 5:
         return None
@@ -114,7 +144,6 @@ def run_strategies(returns_train: pd.DataFrame, risk_level: int) -> dict:
     n = len(valid_tickers)
 
     out = {"tickers": valid_tickers}
-
     out["equal_weight"] = np.ones(n) / n
 
     try:
@@ -128,7 +157,6 @@ def run_strategies(returns_train: pd.DataFrame, risk_level: int) -> dict:
     if mvo_w.sum() > 0:
         mvo_w = mvo_w / mvo_w.sum()
     out["mvo_only"] = mvo_w
-    out["mvo_status"] = mvo_result["status"]
 
     target_vol = RISK_VOLATILITY_CAP[risk_level]
     if out["hrp_only"] is not None:
@@ -144,16 +172,8 @@ def run_strategies(returns_train: pd.DataFrame, risk_level: int) -> dict:
     return out
 
 
-def evaluate(weights: np.ndarray, prices_eval: pd.DataFrame, tickers: list[str]) -> pd.Series:
-    """Daily portfolio returns over the eval window."""
-    if weights is None:
-        return None
-    prices_subset = prices_eval[tickers]
-    asset_returns = prices_subset.pct_change().dropna()
-    return asset_returns @ weights
-
-
-def metrics(daily_returns: pd.Series) -> dict:
+def metrics(daily_returns: pd.Series) -> dict | None:
+    """Annualized return / vol / Sharpe / max drawdown from daily series."""
     if daily_returns is None or len(daily_returns) == 0:
         return None
     n_days = len(daily_returns)
@@ -161,54 +181,48 @@ def metrics(daily_returns: pd.Series) -> dict:
     annual_vol = float(daily_returns.std() * np.sqrt(TRADING_DAYS))
     sharpe = annual_return / annual_vol if annual_vol > 0 else 0.0
     cumulative = (1 + daily_returns).cumprod()
-    running_max = cumulative.cummax()
-    drawdown = (cumulative - running_max) / running_max
-    max_dd = float(drawdown.min())
+    drawdown = (cumulative - cumulative.cummax()) / cumulative.cummax()
     return {
         "annual_return": annual_return,
         "annual_vol": annual_vol,
         "sharpe": float(sharpe),
-        "max_drawdown": max_dd,
+        "max_drawdown": float(drawdown.min()),
     }
 
 
-def main():
-    end_date = datetime.utcnow().date()
-    start_date = end_date - timedelta(days=int(365 * TOTAL_HISTORY_YEARS))
+def run_window(prices: pd.DataFrame, window_start: str, window_end: str) -> tuple[dict, list]:
+    """Walk-forward backtest over a single window. Returns:
+      - results: {(strategy, risk_level): pd.Series of daily returns spanning the window}
+      - routing_log: list of {risk_level, date, method} dicts for the hybrid strategy
+    """
+    win_start_ts = pd.Timestamp(window_start)
+    win_end_ts = pd.Timestamp(window_end)
+    in_window = prices.loc[win_start_ts:win_end_ts]
+    if in_window.empty:
+        return {}, []
 
-    print(f"Fetching prices for {len(UNIVERSE)} tickers ({start_date} to {end_date})...")
-    prices = fetch_prices(UNIVERSE, start_date, end_date)
-    if prices.empty:
-        print("ERROR: no price data fetched")
-        return
-    print(f"Got {len(prices)} trading days, {len(prices.columns)} tickers retained "
-          f"after coverage filter ({sorted(prices.columns)}).")
-
-    earliest_eval = prices.index[0] + pd.DateOffset(years=TRAINING_WINDOW_YEARS)
+    # Quarterly rebalance dates: first trading day on/after each quarter start.
     rebalance_dates = []
-    cursor = earliest_eval
-    while cursor + pd.Timedelta(days=EVAL_WINDOW_DAYS) <= prices.index[-1]:
+    cursor = win_start_ts
+    while cursor <= win_end_ts:
         idx = prices.index.searchsorted(cursor)
-        if idx < len(prices.index):
+        if idx < len(prices.index) and prices.index[idx] <= win_end_ts:
             rebalance_dates.append(prices.index[idx])
-        cursor = cursor + pd.DateOffset(years=1)
+        cursor = cursor + pd.DateOffset(months=3)
 
-    print(f"Rebalance dates: {len(rebalance_dates)} — {[d.date() for d in rebalance_dates]}")
-    print()
-
-    results = {}
-    routing_log = []
+    results: dict = {}
+    routing_log: list = []
 
     for risk_level in RISK_LEVELS:
-        for rebal_date in rebalance_dates:
+        # Per-strategy daily-return stream accumulator
+        per_strategy_returns: dict[str, list[pd.Series]] = {
+            "equal_weight": [], "hrp_only": [], "mvo_only": [], "hybrid": [],
+        }
+
+        for i, rebal_date in enumerate(rebalance_dates):
             train_start = rebal_date - pd.DateOffset(years=TRAINING_WINDOW_YEARS)
-            eval_end_pos = min(prices.index.searchsorted(rebal_date) + EVAL_WINDOW_DAYS, len(prices.index) - 1)
-            eval_end = prices.index[eval_end_pos]
-
             prices_train = prices.loc[train_start:rebal_date]
-            prices_eval = prices.loc[rebal_date:eval_end]
             returns_train = prices_train.pct_change().dropna()
-
             if len(returns_train) < 100:
                 continue
 
@@ -216,20 +230,42 @@ def main():
             if strats is None:
                 continue
 
+            # Hold weights from this rebalance until the next one (or window end)
+            if i + 1 < len(rebalance_dates):
+                hold_end = rebalance_dates[i + 1]
+            else:
+                hold_end = win_end_ts
+            prices_hold = prices.loc[rebal_date:hold_end][strats["tickers"]]
+            asset_returns = prices_hold.pct_change().dropna()
+            if asset_returns.empty:
+                continue
+
             for strat in ["equal_weight", "hrp_only", "mvo_only", "hybrid"]:
                 weights = strats[strat]
-                daily = evaluate(weights, prices_eval, strats["tickers"])
-                if daily is not None and len(daily) > 0:
-                    results.setdefault((strat, risk_level), []).append(daily)
+                if weights is None:
+                    continue
+                portfolio_returns = asset_returns @ weights
+                per_strategy_returns[strat].append(portfolio_returns)
 
+            if risk_level == RISK_LEVELS[0]:
+                # Routing log is risk-level-specific; capture for all 3 levels
+                pass
             routing_log.append({
                 "risk_level": risk_level,
                 "date": rebal_date.date(),
                 "method": strats["hybrid_method"],
             })
 
+        for strat, series_list in per_strategy_returns.items():
+            if series_list:
+                results[(strat, risk_level)] = pd.concat(series_list)
+
+    return results, routing_log
+
+
+def print_window(label: str, results: dict):
     print("=" * 84)
-    print("TABLE A — Per-strategy annualized metrics across all eval windows")
+    print(f"TABLE A — {label}")
     print("=" * 84)
     print(f"{'strategy':<15} {'risk':>5} {'annual_ret':>12} {'annual_vol':>12} {'sharpe':>8} {'max_dd':>10}")
     print("-" * 84)
@@ -239,8 +275,7 @@ def main():
             if key not in results:
                 print(f"{strat:<15} {risk_level:>5}     (no data)")
                 continue
-            all_returns = pd.concat(results[key])
-            m = metrics(all_returns)
+            m = metrics(results[key])
             print(
                 f"{strat:<15} {risk_level:>5} "
                 f"{m['annual_return']*100:>11.2f}% {m['annual_vol']*100:>11.2f}% "
@@ -248,10 +283,42 @@ def main():
             )
         print()
 
+
+def main():
+    print(f"Fetching prices for {len(UNIVERSE)} tickers ({DATA_FETCH_START} to {DATA_FETCH_END})...")
+    prices = fetch_prices(UNIVERSE, DATA_FETCH_START, DATA_FETCH_END)
+    if prices.empty:
+        print("ERROR: no price data fetched")
+        return
+    print(f"Got {len(prices)} trading days, {len(prices.columns)} tickers retained: "
+          f"{sorted(prices.columns)}")
+    print()
+
+    all_window_results = []
+    all_routing_logs = []
+
+    for window_start, window_end in WINDOWS:
+        print(f"Running window {window_start} to {window_end}...")
+        results, routing_log = run_window(prices, window_start, window_end)
+        all_window_results.append((f"Window {window_start[:4]}-{window_end[:4]}", results))
+        all_routing_logs.extend(routing_log)
+        print()
+
+    for label, results in all_window_results:
+        print_window(label, results)
+
+    # Combined-windows view: concatenate the two windows' return series per (strat, risk)
+    combined = {}
+    for label, results in all_window_results:
+        for key, series in results.items():
+            combined.setdefault(key, []).append(series)
+    combined = {k: pd.concat(v) for k, v in combined.items()}
+    print_window("Combined (both windows)", combined)
+
     print("=" * 84)
-    print("TABLE B — Hybrid routing distribution (counts across rebalances)")
+    print("TABLE B — Hybrid routing distribution (counts across all rebalances, both windows)")
     print("=" * 84)
-    routing_df = pd.DataFrame(routing_log)
+    routing_df = pd.DataFrame(all_routing_logs)
     if len(routing_df) > 0:
         pivot = routing_df.groupby(["risk_level", "method"]).size().unstack(fill_value=0)
         print(pivot.to_string())
