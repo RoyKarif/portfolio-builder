@@ -48,12 +48,30 @@ else:
 ```python
 HRP_UPPER_TOLERANCE = 1.10  # renamed from HRP_VOL_TOLERANCE
 HRP_LOWER_TOLERANCE = 0.7   # new
+HRP_TOLERANCE_EPSILON = 1e-9  # FP slack at the boundary; favors HRP
 
-if target_vol * HRP_LOWER_TOLERANCE <= hrp_candidate_vol <= target_vol * HRP_UPPER_TOLERANCE:
+lower = target_vol * HRP_LOWER_TOLERANCE - HRP_TOLERANCE_EPSILON
+upper = target_vol * HRP_UPPER_TOLERANCE + HRP_TOLERANCE_EPSILON
+if lower <= hrp_candidate_vol <= upper:
     use HRP
 else:
     use MVO  # bring vol DOWN if too high, OR UP if HRP underutilizes the budget
 ```
+
+**Boundary inclusivity (explicit).** Both bounds are inclusive: HRP wins
+when `hrp_candidate_vol == cap × LOWER` and when
+`hrp_candidate_vol == cap × UPPER`. The `<=` operators in the code make
+this exact, but stating it in prose prevents off-by-one bugs in future
+test cases or refactors.
+
+**Numerical stability.** A small epsilon (`HRP_TOLERANCE_EPSILON = 1e-9`)
+expands the HRP-wins band on both sides so float-precision wobble at the
+boundary doesn't produce inconsistent routing. The epsilon biases
+*toward* HRP — when `hrp_candidate_vol` lands within ~1e-9 of either
+boundary, HRP wins. This is the conservative choice: HRP is the default
+behavior, so when the routing decision is genuinely indeterminate, fall
+back to the default. The constant is small enough that it doesn't change
+any non-pathological case.
 
 **Conceptual framing.** Both bounds are about *fit to the user's stated
 preference*, not about HRP being right or wrong:
@@ -261,6 +279,23 @@ If the HRP win rate falls materially below 30% on the current
 generator, the lower tolerance is over-tight and needs loosening
 toward 0.6 or 0.5. If it stays well above 50%, the rule isn't
 biting — consider tightening LOWER toward 0.8.
+
+**Differentiation is at the routing/intent level, not guaranteed
+weight divergence.** There will be cases where HRP triggers MVO
+(underutilized or overshoot) but MVO returns weights very close to the
+HRP candidate — for example, when `hrp_candidate_vol` lands just
+barely outside the band, MVO with the cap as its risk constraint may
+solve to nearly the same allocation. In those cases `weighting_method`
+will differ from `"hrp"` while the actual portfolio is essentially
+identical to what HRP would have produced.
+
+That's expected behavior, not a bug. What we're measuring at the
+validation level is *meaningful differentiation in aggregate* — the
+slider produces materially different portfolios across the risk
+levels in most cases. Validation should not assert weight divergence
+in every single case; the routing decision is the contract, and
+weight divergence is a (usually-present) consequence rather than a
+guarantee.
 
 ## Out of scope (this iteration)
 
