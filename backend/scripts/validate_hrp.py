@@ -132,6 +132,7 @@ def run_synthetic_sweep(out_csv: Path):
     routing_counts = {
         "hrp": 0,
         "mvo_risk_cap": 0,
+        "mvo_underutilized": 0,
         "mvo_fallback_hrp_error": 0,
         "fallback_equal_weight": 0,
     }
@@ -203,9 +204,25 @@ def print_routing(routing_counts, total):
     print("=" * 64)
     print(f"{'weighting_method':<28} {'count':>6} {'pct':>6}")
     print("-" * 64)
-    for method in ["hrp", "mvo_risk_cap", "mvo_fallback_hrp_error", "fallback_equal_weight"]:
+    for method in ["hrp", "mvo_risk_cap", "mvo_underutilized", "mvo_fallback_hrp_error", "fallback_equal_weight"]:
         c = routing_counts[method]
         print(f"{method:<28} {c:>6} {c*100/total:>5.1f}%")
+    print()
+
+    # Calibration guardrail: if HRP win rate drops materially below 30% on
+    # the current synthetic generator, the lower tolerance is over-tight
+    # and HRP_LOWER_TOLERANCE should be relaxed (toward 0.6 or 0.5).
+    # If it stays well above 50%, the rule isn't biting (consider tightening
+    # toward 0.8). This threshold reflects the current synthetic generator;
+    # if the generator changes materially, recalibrate alongside.
+    hrp_pct = routing_counts["hrp"] * 100 / total
+    print(f"HRP win rate on synthetic sweep: {hrp_pct:.1f}%")
+    if hrp_pct < 30:
+        print("  WARNING: below ~30% — revisit HRP_LOWER_TOLERANCE calibration (consider loosening)")
+    elif hrp_pct > 50:
+        print("  NOTE: above ~50% — rule may not be biting hard enough (consider tightening)")
+    else:
+        print("  OK: within expected ~30-50% calibration range")
     print()
 
 
@@ -332,8 +349,10 @@ def run_real_data_spot_check():
     }
 
     # Criterion 1: no equal-weight collapse on risk levels 1-3.
+    # Accepted outcomes: hrp, mvo_risk_cap, mvo_underutilized — all three
+    # are real construction outcomes (not the equal-weight rescue path).
     methods_1_3 = {rl: runs[rl]["weighting_method"] for rl in [1, 2, 3]}
-    crit1_pass = all(m in {"hrp", "mvo_risk_cap"} for m in methods_1_3.values())
+    crit1_pass = all(m in {"hrp", "mvo_risk_cap", "mvo_underutilized"} for m in methods_1_3.values())
     print(f"  [1] No equal-weight collapse on risk_level 1-3:  {'PASS' if crit1_pass else 'FAIL'}")
     print(f"      methods: {methods_1_3}")
 
