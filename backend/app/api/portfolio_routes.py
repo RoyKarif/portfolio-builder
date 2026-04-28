@@ -1,5 +1,6 @@
 """Portfolio endpoints: build / list / get / delete."""
 
+import secrets
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -81,7 +82,11 @@ def build_portfolio(
     )
 
     # 6. Monte Carlo.
-    mc_seed = 42  # deterministic; persisted on the row for reproducibility
+    # Random seed per build → each new build shows a different fan chart
+    # (even if the MVO weights are identical, because MVO is deterministic
+    # given the same μ, Σ, and target). The seed is persisted on the row,
+    # so reopening this portfolio later reproduces the exact same chart.
+    mc_seed = secrets.randbits(31)
     final_values, cumulative = simulate_portfolio(
         weights=weights_arr,
         mu_annual=mu,
