@@ -28,7 +28,10 @@ services:
     healthcheck:
       # Compose waits until pg_isready returns success before marking
       # the service "healthy". The backend depends_on uses this.
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-portfolio}"]
+      # We pass -d explicitly because pg_isready otherwise defaults to
+      # connecting to a DB matching the user name (which doesn't exist),
+      # producing noisy "FATAL: database X does not exist" log lines.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-portfolio} -d ${POSTGRES_DB:-portfolio_builder}"]
       interval: 5s
       timeout: 3s
       retries: 10
