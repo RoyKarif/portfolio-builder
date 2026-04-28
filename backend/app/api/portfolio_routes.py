@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
-from app.data import portfolio_repo, price_repo
+from app.data import asset_repo, portfolio_repo, price_repo
 from app.data.price_fetcher import ensure_prices_fresh
 from app.db import get_db
 from app.engine import (
@@ -58,17 +58,28 @@ def build_portfolio(
     sigma = covariance_matrix(log_returns)
 
     # 4. Map risk level to target volatility, then solve MVO.
+    # We also pass the per-ticker asset_classes so MVO can enforce the
+    # per-class cap (no single class > 50%) — prevents 100% equity even
+    # at the highest risk level.
     target_vol = RISK_LEVEL_TO_VOLATILITY[request.risk_level]
+    tickers_in_order = list(prices.columns)
+    asset_classes = []
+    for ticker in tickers_in_order:
+        asset = asset_repo.get_asset_by_ticker(db, ticker)
+        asset_classes.append(asset.asset_class if asset else "equity")
+
     try:
-        weights_arr = solve_mvo(mu, sigma, target_volatility=target_vol)
+        weights_arr = solve_mvo(
+            mu, sigma,
+            target_volatility=target_vol,
+            asset_classes=asset_classes,
+        )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Portfolio infeasible: {e}",
         )
 
-    # Map weights back to tickers (the order from the DataFrame).
-    tickers_in_order = list(prices.columns)
     weights = {t: float(w) for t, w in zip(tickers_in_order, weights_arr)}
 
     # 5. Compute expected stats.

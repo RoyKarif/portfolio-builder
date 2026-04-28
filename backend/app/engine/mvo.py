@@ -4,25 +4,31 @@ The central model of the project. Given:
   - μ (vector of expected returns)
   - Σ (covariance matrix)
   - σ_target (max acceptable portfolio volatility)
-  - max_single_weight (diversification constraint)
+  - max_single_weight (per-asset cap)
+  - max_class_weight (per-asset-class cap)
+  - asset_classes (parallel to μ; needed for the class cap)
 
 …find the weights vector w that maximizes expected return while
-keeping portfolio risk under the limit.
+keeping portfolio risk under the limit AND respecting both
+diversification caps.
 
 Mathematical statement:
 
-    Maximize:     μᵀw                         (expected portfolio return)
-    Subject to:   wᵀΣw ≤ σ_target²            (variance under limit)
-                  sum(w) = 1                   (fully invested)
-                  0 ≤ w_i ≤ max_single_weight (long-only, diversified)
+    Maximize:     μᵀw
+    Subject to:   wᵀΣw ≤ σ_target²
+                  sum(w) = 1
+                  0 ≤ w_i ≤ max_single_weight             ∀i
+                  Σ_{i∈class}  w_i ≤ max_class_weight     ∀class
 
-This is a Quadratic Program (linear objective, quadratic constraint).
-We solve it with cvxpy, which converts the problem to conic form and
-hands it to an interior-point solver.
+Why two caps?
 
-Note: the constraint is `wᵀΣw ≤ σ²` (not `√(wᵀΣw) ≤ σ`) because both
-sides are non-negative — squaring is equivalent and produces a cleaner
-QP.
+Without them, classic MVO is famous for producing concentrated
+3-asset portfolios — it aggressively exploits even tiny differences
+in historical μ. The single-asset cap forces breadth; the class cap
+forces *cross-asset-class* diversification (e.g., even at risk level
+5 you can't go 100% equity).
+
+This is a Quadratic Program. We solve it with cvxpy.
 """
 
 import cvxpy as cp
@@ -30,10 +36,7 @@ import numpy as np
 
 
 # Maps the user-facing risk slider (1..5) to a target annualized
-# volatility. These values are chosen to span the practical range:
-#   1 = ~5%  (mostly bonds, very conservative)
-#   3 = ~12% (balanced)
-#   5 = ~20% (close to all-equity, ~SPY volatility)
+# volatility.
 RISK_LEVEL_TO_VOLATILITY: dict[int, float] = {
     1: 0.05,
     2: 0.08,
@@ -47,7 +50,9 @@ def solve_mvo(
     mu: np.ndarray,
     sigma: np.ndarray,
     target_volatility: float,
-    max_single_weight: float = 0.4,
+    max_single_weight: float = 0.20,
+    max_class_weight: float = 0.50,
+    asset_classes: list[str] | None = None,
 ) -> np.ndarray:
     """Solve the MVO problem and return optimal weights.
 
@@ -55,50 +60,51 @@ def solve_mvo(
         mu: 1-D array of length N — expected annualized returns.
         sigma: N×N positive semi-definite covariance matrix.
         target_volatility: max annualized portfolio σ (e.g. 0.12 for 12%).
-        max_single_weight: hard cap per asset (default 0.4 = 40%).
-            Without this, MVO often piles into the highest-μ asset alone;
-            this constraint forces diversification.
+        max_single_weight: per-asset cap (default 20%). Forces ≥ 5 holdings.
+        max_class_weight: per-asset-class cap (default 50%). Prevents any
+            single class (equity / bond / commodity / real_estate / cash)
+            from dominating.
+        asset_classes: list of length N giving the class of each asset
+            (parallel to `mu`). If None, the class cap is skipped.
 
     Returns:
         1-D array of length N with non-negative weights summing to 1.
 
     Raises:
-        ValueError if the solver fails to find an optimal solution
-        (typically means the problem is infeasible — e.g. target_volatility
-        smaller than the minimum-variance portfolio's σ).
+        ValueError if the solver fails to find an optimal solution.
     """
     n = len(mu)
-
-    # Decision variable: the weights vector.
     w = cp.Variable(n)
-
-    # Objective: maximize linear function of w.
-    # `mu @ w` is the dot product — cvxpy's @ is overloaded.
     objective = cp.Maximize(mu @ w)
 
-    # Constraints — each one becomes a row in the conic form.
     constraints = [
-        # Fully invested.
         cp.sum(w) == 1,
-        # Long-only.
         w >= 0,
-        # Per-asset cap (diversification).
         w <= max_single_weight,
-        # Variance under target². cvxpy.quad_form is wᵀΣw, and it
-        # automatically verifies that Σ is positive semi-definite.
         cp.quad_form(w, sigma) <= target_volatility ** 2,
     ]
+
+    # Per-class cap. For each unique class, the sum of weights of
+    # assets in that class must be ≤ max_class_weight.
+    if asset_classes is not None:
+        if len(asset_classes) != n:
+            raise ValueError(
+                f"asset_classes length {len(asset_classes)} != mu length {n}"
+            )
+        for cls in set(asset_classes):
+            # Indicator vector: 1 where asset is in this class, 0 otherwise.
+            mask = np.array(
+                [1.0 if c == cls else 0.0 for c in asset_classes]
+            )
+            constraints.append(mask @ w <= max_class_weight)
 
     problem = cp.Problem(objective, constraints)
     problem.solve()
 
-    # Cvxpy returns one of: OPTIMAL, OPTIMAL_INACCURATE, INFEASIBLE,
-    # UNBOUNDED, etc. We accept the first two (INACCURATE just means
-    # solver tolerance was loose, but the answer is still good).
     if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
         raise ValueError(
             f"MVO failed: status={problem.status}. "
-            f"Try a higher target_volatility."
+            f"Try a higher target_volatility or relax the class cap."
         )
 
     # Clamp negatives that arise from solver tolerance (e.g. -1e-12).
