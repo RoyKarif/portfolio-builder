@@ -1,10 +1,10 @@
 // Main page: friendly form on top, results below after submission.
 //
-// Design principle: the user gives 2 inputs (amount+horizon and risk).
-// Asset selection is COMPLETELY hidden by default — most users don't
-// know what tickers are. Only a small "advanced" link reveals it.
+// Design principle: the user gives 4 inputs (amount+horizon, risk,
+// investment scope, country). Asset selection is hidden behind an
+// "advanced" link — most users don't know what tickers are.
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, useMemo, type FormEvent, type ReactNode } from "react";
 import { Layout } from "../components/Layout";
 import { RiskSlider } from "../components/RiskSlider";
 import { UniverseSelector } from "../components/UniverseSelector";
@@ -14,25 +14,49 @@ import type { Asset, PortfolioResponse } from "../types/api";
 
 // Plain-language description of what each risk level means.
 const RISK_DESCRIPTIONS: Record<number, string> = {
-  1: "תיק שמרני מאוד: רוב הכסף באג\"ח ומזומן. תנודות קטנות, תשואה צנועה. מתאים למי שמתעב הפסדים אפילו זמניים.",
+  1: "תיק שמרני מאוד: רוב הכסף באג\"ח ומזומן. תנודות קטנות, תשואה צנועה.",
   2: "תיק שמרני: בעיקר אג\"ח עם אחוז קטן של מניות. תנודתיות נמוכה.",
   3: "תיק מאוזן: שילוב קלאסי של מניות ואג\"ח. מתאים לרוב המשקיעים לטווח בינוני-ארוך.",
-  4: "תיק אגרסיבי מתון: רוב הכסף במניות, עם כרית בטחון של אג\"ח. תנודות חזקות יותר.",
-  5: "תיק אגרסיבי: כמעט הכל במניות. תשואה צפויה גבוהה, אבל גם הפסדים זמניים יכולים להיות משמעותיים.",
+  4: "תיק אגרסיבי מתון: רוב הכסף במניות, עם כרית בטחון של אג\"ח.",
+  5: "תיק אגרסיבי: כמעט הכל במניות. תשואה צפויה גבוהה, אבל תנודות חזקות.",
 };
 
+// Country → short note about access/tax considerations.
+type Country = "israel" | "us" | "europe" | "other";
+
+const COUNTRY_OPTIONS: { value: Country; label: string }[] = [
+  { value: "israel", label: "ישראל" },
+  { value: "us", label: "ארה\"ב" },
+  { value: "europe", label: "אירופה (EU/UK)" },
+  { value: "other", label: "אחר" },
+];
+
+const COUNTRY_NOTES: Record<Country, string> = {
+  israel:
+    "כל ה-ETFs האמריקאיים זמינים דרך ברוקרים ישראליים. שים לב למס על דיבידנדים זרים (15%) ולמס עיזבון אמריקאי על פוזיציות שערכן מעל $60K.",
+  us:
+    "אין הגבלות נוספות — גישה מלאה לכל ה-ETFs האמריקאיים.",
+  europe:
+    "תקנות PRIIPs עלולות להגביל גישה ל-ETFs אמריקאיים. ברוקרים אירופאיים בדרך כלל ידרשו ETFs בתצורת UCITS (אירופאיים) במקום אמריקאיים. רוב ה-ETFs ברשימה כאן הם אמריקאיים.",
+  other:
+    "ייתכנו הגבלות גישה תלויות-מדינה. בדוק עם הברוקר שלך אילו ETFs אמריקאיים זמינים לך.",
+};
+
+// What the "investment scope" radio means.
+type Scope = "all" | "equity_only";
+
 export function BuildPage() {
-  // universe = the curated tickers from the backend. null = still loading,
-  // [] = loaded but empty (seed wasn't run), [...] = ready.
   const [universe, setUniverse] = useState<Asset[] | null>(null);
   const [universeError, setUniverseError] = useState<string | null>(null);
 
   const [amount, setAmount] = useState(10000);
   const [risk, setRisk] = useState(3);
   const [horizon, setHorizon] = useState(10);
+  const [scope, setScope] = useState<Scope>("all");
+  const [country, setCountry] = useState<Country>("israel");
 
-  // Tickers actually used for the build. By default = entire universe.
-  // Only changed if the user opens the advanced customizer.
+  // Tickers selected for the build. Default = entire universe.
+  // Modified only via the advanced customizer.
   const [tickers, setTickers] = useState<string[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -40,41 +64,53 @@ export function BuildPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load curated universe on mount.
+  // Load curated universe.
   useEffect(() => {
     api.universe.getCurated()
       .then((u) => {
         setUniverse(u);
-        setTickers(u.map((a) => a.ticker));  // pre-select everything
+        setTickers(u.map((a) => a.ticker));
       })
       .catch(() => {
         setUniverseError("לא הצלחתי לטעון את רשימת הנכסים מהשרת.");
       });
   }, []);
 
+  // The actual list of tickers that will go to the backend, after
+  // applying the scope filter.
+  const effectiveTickers = useMemo(() => {
+    if (universe === null) return [];
+    if (scope === "all") return tickers;
+    // "equity_only": keep only those whose asset_class is 'equity'.
+    const equityTickers = new Set(
+      universe.filter((a) => a.asset_class === "equity").map((a) => a.ticker),
+    );
+    return tickers.filter((t) => equityTickers.has(t));
+  }, [tickers, scope, universe]);
+
+  const equityCountInUniverse = useMemo(
+    () => universe?.filter((a) => a.asset_class === "equity").length ?? 0,
+    [universe],
+  );
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    // Guard: universe not yet loaded.
     if (universe === null) {
       setError("הנתונים עדיין נטענים. רגע אחד...");
       return;
     }
-
-    // Guard: universe is empty — seed hasn't run.
     if (universe.length === 0) {
       setError(
-        "המערכת ריקה מנכסים. כנראה שהזרעה הראשונית עדיין לא רצה. " +
-        "הרץ בטרמינל את הפקודה: make seed (זה לוקח ~5 דקות)."
+        "המערכת ריקה מנכסים. כנראה שהזרעה עדיין לא רצה. " +
+        "הרץ בטרמינל: make seed (או ניסה seed עם synthetic data).",
       );
       return;
     }
-
-    // Guard: user opened advanced and deselected too many.
-    if (tickers.length < 2) {
+    if (effectiveTickers.length < 2) {
       setError(
-        "במצב מתקדם: הסרת יותר מדי נכסים. השאר לפחות 2 כדי שהמערכת תוכל לחשב פיזור."
+        "פחות מ-2 נכסים זמינים אחרי הסינונים שבחרת. שנה את ההגדרות (למשל, הסר את אילוץ \"רק מניות\").",
       );
       return;
     }
@@ -86,7 +122,7 @@ export function BuildPage() {
         amount,
         risk_level: risk,
         horizon_years: horizon,
-        tickers,
+        tickers: effectiveTickers,
       });
       setResult(portfolio);
       setTimeout(() => {
@@ -111,21 +147,15 @@ export function BuildPage() {
 
   return (
     <Layout>
-      {/* Title & subtitle */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold">בנה פורטפוליו השקעות</h1>
         <p className="text-gray-600 mt-2 leading-relaxed">
           הכלי משתמש במודל המתמטי של מרקוביץ' (Mean-Variance Optimization) כדי
           לבחור עבורך את שילוב הנכסים שמקסים תשואה צפויה ברמת הסיכון שתבחר.
-          ענה על שתי שאלות, ולחץ "בנה".
         </p>
       </div>
 
-      {/* Universe-loading status banner */}
-      <UniverseStatus
-        universe={universe}
-        error={universeError}
-      />
+      <UniverseStatus universe={universe} error={universeError} />
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* === Section 1: Amount + Horizon === */}
@@ -150,7 +180,7 @@ export function BuildPage() {
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
               </div>
             </Field>
-            <Field label="אופק זמן" hint="בין שנה ל-30 שנה. המלצה: 5+">
+            <Field label="אופק זמן" hint="בין שנה ל-30. המלצה: 5+">
               <div className="relative">
                 <input
                   type="number"
@@ -181,13 +211,59 @@ export function BuildPage() {
           </div>
         </Section>
 
+        {/* === Section 3: Scope + Country === */}
+        <Section
+          number={3}
+          title="באילו נכסים ואיפה אתה?"
+          subtitle="זה משפיע על מה ייכלל בפורטפוליו ועל הערות מיסוי/גישה רלוונטיות."
+        >
+          <div className="space-y-5">
+            <Field label="סוג ההשקעה">
+              <div className="space-y-2">
+                <RadioOption
+                  checked={scope === "all"}
+                  onChange={() => setScope("all")}
+                  label="תיק מגוון"
+                  description="מניות + אג״ח + סחורות + נדל״ן + מזומן (20 נכסים)"
+                />
+                <RadioOption
+                  checked={scope === "equity_only"}
+                  onChange={() => setScope("equity_only")}
+                  label="רק מניות"
+                  description={`רק ETFs של מניות (${equityCountInUniverse} נכסים)`}
+                />
+              </div>
+            </Field>
+
+            <Field label="ארץ מגורים" hint="כדי לתת לך הערות מיסוי/גישה">
+              <select
+                value={country}
+                onChange={(e) => setCountry(e.target.value as Country)}
+                className="w-full border rounded px-3 py-2 text-lg bg-white"
+              >
+                {COUNTRY_OPTIONS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <div className="p-3 bg-amber-50 border-r-4 border-amber-400 rounded">
+              <div className="text-sm text-amber-900 leading-relaxed">
+                <span className="font-semibold">ℹ הערה: </span>
+                {COUNTRY_NOTES[country]}
+              </div>
+            </div>
+          </div>
+        </Section>
+
         {error && (
           <div className="bg-red-50 border-r-4 border-red-500 p-4 rounded">
             <div className="text-red-700 font-medium leading-relaxed">{error}</div>
           </div>
         )}
 
-        {/* === Submit === */}
         <button
           type="submit"
           disabled={submitting || !universeReady}
@@ -197,10 +273,10 @@ export function BuildPage() {
             ? "מחשב את הפורטפוליו האופטימלי..."
             : !universeReady
               ? "טוען נתונים..."
-              : "בנה את הפורטפוליו שלי ←"}
+              : `בנה את הפורטפוליו שלי (${effectiveTickers.length} נכסים) ←`}
         </button>
 
-        {/* === Advanced (collapsible) — at the BOTTOM, intentionally less visible === */}
+        {/* Advanced — at the bottom, intentionally less visible */}
         <div className="pt-6 border-t">
           {!showAdvanced ? (
             <button
@@ -212,9 +288,9 @@ export function BuildPage() {
             </button>
           ) : (
             <Section
-              number={3}
+              number={4}
               title="התאמה אישית של יקום הנכסים (מתקדם)"
-              subtitle="המערכת בוחרת אוטומטית מתוך הרשימה. הסר סימון כדי להוציא נכס, או הוסף ticker מותאם בתחתית."
+              subtitle="הסר סימון כדי להוציא נכס, או הוסף ticker מותאם בתחתית."
             >
               <div className="flex justify-between items-center mb-3 text-sm text-gray-600">
                 <span>
@@ -280,14 +356,13 @@ function UniverseStatus({
       <div className="mb-6 bg-yellow-50 border-r-4 border-yellow-500 p-4 rounded">
         <div className="text-yellow-800 font-medium">המערכת ריקה מנכסים.</div>
         <div className="text-sm text-yellow-700 mt-1 leading-relaxed">
-          הזרעה הראשונית של 10 שנות מחירים עדיין לא רצה. הרץ בטרמינל:{" "}
+          הזרעה הראשונית עדיין לא רצה. הרץ:{" "}
           <code className="bg-yellow-100 px-1 rounded">make seed</code>{" "}
-          (לוקח ~5 דקות, מוריד מ-yfinance). אחרי שזה מסתיים — רענן את הדף.
+          ואחרי שזה מסתיים — רענן.
         </div>
       </div>
     );
   }
-  // Universe loaded successfully — no banner.
   return null;
 }
 
@@ -333,5 +408,40 @@ function Field({
       {children}
       {hint && <div className="text-xs text-gray-500 mt-1">{hint}</div>}
     </div>
+  );
+}
+
+function RadioOption({
+  checked,
+  onChange,
+  label,
+  description,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+  description?: string;
+}) {
+  return (
+    <label
+      className={`block border-2 rounded-lg p-3 cursor-pointer transition ${
+        checked ? "border-blue-600 bg-blue-50" : "border-gray-200 hover:border-gray-300"
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        <input
+          type="radio"
+          checked={checked}
+          onChange={onChange}
+          className="mt-1"
+        />
+        <div>
+          <div className="font-medium">{label}</div>
+          {description && (
+            <div className="text-sm text-gray-600 mt-0.5">{description}</div>
+          )}
+        </div>
+      </div>
+    </label>
   );
 }
