@@ -105,6 +105,12 @@ def solve_mvo(
 
     # Per-class caps. Classes not in `class_caps` (or with cap >= 1.0)
     # get no constraint.
+    #
+    # IMPORTANT: a class cap can become infeasible if the universe doesn't
+    # have enough OTHER-class assets to fill (1 - cap). For example, if
+    # the user filtered to "stocks only", the universe is 100% equity,
+    # and an equity cap of 70% requires 30% in non-equity → impossible.
+    # We auto-relax any cap that conflicts with the universe composition.
     if asset_classes is not None:
         if len(asset_classes) != n:
             raise ValueError(
@@ -114,7 +120,24 @@ def solve_mvo(
         for cls in set(asset_classes):
             cap = caps.get(cls, 1.0)
             if cap >= 1.0:
-                continue  # no constraint needed
+                continue
+
+            # Maximum possible allocation to assets NOT in this class,
+            # given the per-asset cap. (This ignores the per-class caps
+            # on the *other* classes, which is a conservative upper
+            # bound — good enough for feasibility detection.)
+            n_other = sum(1 for c in asset_classes if c != cls)
+            max_other_alloc = n_other * max_single_weight
+
+            # The class cap requires (1 - cap) to live in other classes.
+            # If max_other_alloc can't supply that, raise the cap.
+            required_other = 1.0 - cap
+            if max_other_alloc < required_other - 1e-9:
+                cap = 1.0 - max_other_alloc  # the most we can demand of "other"
+
+            if cap >= 1.0 - 1e-9:
+                continue  # would be a no-op constraint
+
             mask = np.array(
                 [1.0 if c == cls else 0.0 for c in asset_classes]
             )
