@@ -1,61 +1,25 @@
-"""One-time setup: populate the curated universe and download 10 years
-of daily prices for each asset.
+"""Manual bulk seed — pre-warms the price cache for all curated assets.
 
-Run with: `make seed` (or `python -m scripts.seed_universe` inside the
-container).
+USAGE NOTE: as of the lazy-fetch refactor, this script is OPTIONAL.
+The build endpoint auto-fetches what it needs when you click "Build"
+in the UI. This script is useful when you want to pre-warm everything
+once, off the critical path.
 
-Strategy:
-  1. Try to fetch real prices from yfinance.
-  2. If yfinance fails (Yahoo's API breaks regularly), fall back to
-     synthetic prices generated with GBM and realistic per-class μ/σ.
-     The synthetic data is deterministic (seeded by ticker hash) so
-     re-runs are reproducible.
+Run with: `make seed` (or `python -m scripts.seed_universe` inside
+the container).
 
-Idempotent: skips assets and prices that already exist. Safe to re-run
-after adding a new ticker to CURATED_UNIVERSE.
+Pass `--synthetic` to skip yfinance entirely and use simulated data.
 
-Pass --synthetic on the command line to skip yfinance entirely.
+Idempotent.
 """
 
 from __future__ import annotations
 import sys
-import time
 
 from app.data import asset_repo, price_repo, yfinance_client
+from app.data.universe_definition import CURATED_UNIVERSE
 from app.db import SessionLocal
 from scripts.synthetic_prices import synthetic_price_history
-
-
-# (ticker, display_name, asset_class)
-CURATED_UNIVERSE: list[tuple[str, str, str]] = [
-    # --- US equity, broad ---
-    ("SPY", "SPDR S&P 500 ETF", "equity"),
-    ("QQQ", "Invesco QQQ (NASDAQ-100)", "equity"),
-    ("IWM", "iShares Russell 2000 (Small Cap)", "equity"),
-    ("VTI", "Vanguard Total Stock Market", "equity"),
-    # --- US equity, sector / style ---
-    ("XLK", "Technology Select Sector SPDR", "equity"),
-    ("XLF", "Financials Select Sector SPDR", "equity"),
-    ("XLE", "Energy Select Sector SPDR", "equity"),
-    ("XLV", "Health Care Select Sector SPDR", "equity"),
-    # --- International equity ---
-    ("EFA", "iShares MSCI EAFE (Developed ex-US)", "equity"),
-    ("EEM", "iShares MSCI Emerging Markets", "equity"),
-    ("VGK", "Vanguard FTSE Europe", "equity"),
-    # --- Bonds ---
-    ("AGG", "iShares Core U.S. Aggregate Bond", "bond"),
-    ("TLT", "iShares 20+ Year Treasury", "bond"),
-    ("LQD", "iShares iBoxx Investment Grade Corporate", "bond"),
-    ("HYG", "iShares iBoxx High Yield Corporate", "bond"),
-    # --- Commodities ---
-    ("GLD", "SPDR Gold Trust", "commodity"),
-    ("SLV", "iShares Silver Trust", "commodity"),
-    ("DBC", "Invesco DB Commodity Index", "commodity"),
-    # --- Real estate ---
-    ("VNQ", "Vanguard Real Estate ETF", "real_estate"),
-    # --- Cash equivalent ---
-    ("BIL", "SPDR 1-3 Month T-Bill", "cash"),
-]
 
 
 def seed(force_synthetic: bool = False) -> None:
@@ -68,7 +32,6 @@ def seed(force_synthetic: bool = False) -> None:
             kind = _seed_one(db, ticker, name, asset_class, force_synthetic)
             if kind == "real":
                 real_count += 1
-                time.sleep(0.5)  # be polite to yfinance
             elif kind == "synthetic":
                 synthetic_count += 1
         print()
@@ -76,13 +39,12 @@ def seed(force_synthetic: bool = False) -> None:
               f"({real_count} real, {synthetic_count} synthetic).")
         if synthetic_count > 0:
             print("⚠ some assets used SYNTHETIC data (yfinance was unavailable).")
-            print("  This is fine for a demo, but the prices are simulated.")
     finally:
         db.close()
 
 
 def _seed_one(db, ticker, name, asset_class, force_synthetic: bool) -> str:
-    """Seed a single asset. Returns 'real' or 'synthetic' depending on data source."""
+    """Seed a single asset. Returns 'real' or 'synthetic'."""
     existing = asset_repo.get_asset_by_ticker(db, ticker)
     if existing is None:
         asset_repo.create_asset(
@@ -97,7 +59,6 @@ def _seed_one(db, ticker, name, asset_class, force_synthetic: bool) -> str:
         db.commit()
         print(f"⬆ promoted {ticker} to curated")
 
-    # Decide source: try yfinance unless forced to synthetic.
     rows = None
     source = "synthetic"
     if not force_synthetic:

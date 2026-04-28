@@ -1,13 +1,13 @@
 """Portfolio endpoints: build / list / get / delete."""
 
-from datetime import date, timedelta
-from decimal import Decimal
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
-from app.data import asset_repo, portfolio_repo, price_repo, yfinance_client
+from app.data import portfolio_repo, price_repo
+from app.data.price_fetcher import ensure_prices_fresh
 from app.db import get_db
 from app.engine import (
     daily_log_returns,
@@ -30,55 +30,6 @@ from app.schemas.portfolio import (
 router = APIRouter(prefix="/api/portfolios", tags=["portfolios"])
 
 
-# How recent the price history must be before we re-fetch from yfinance
-# for a custom ticker. 7 days is a pragmatic default — fresh enough for
-# a portfolio decision, not so strict that we hammer yfinance.
-PRICE_FRESHNESS_DAYS = 7
-
-
-def _ensure_prices_available(
-    db: Session,
-    tickers: list[str],
-    years: int = 10,
-) -> None:
-    """Make sure every requested ticker has fresh prices in the DB.
-
-    For curated tickers seeded ahead of time, this is a no-op.
-    For custom tickers (added by user), we hit yfinance the first time
-    or when local data is stale.
-    """
-    cutoff = date.today() - timedelta(days=PRICE_FRESHNESS_DAYS)
-
-    for ticker in tickers:
-        latest = price_repo.latest_price_date(db, ticker)
-        if latest is not None and latest >= cutoff:
-            # Fresh enough — skip.
-            continue
-
-        # Either we have no data, or it's stale. Fetch from yfinance.
-        try:
-            rows = yfinance_client.fetch_price_history(ticker, years=years)
-        except yfinance_client.YFinanceError as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot fetch prices for {ticker}: {e}",
-            )
-
-        # Make sure the asset row exists. If not (custom ticker), create one
-        # with sensible defaults. The user can refine asset_class later.
-        if asset_repo.get_asset_by_ticker(db, ticker) is None:
-            asset_repo.create_asset(
-                db,
-                ticker=ticker,
-                name=ticker,
-                asset_class="equity",  # default; user can correct
-                is_curated=False,
-            )
-
-        price_repo.bulk_insert_prices(db, ticker, rows)
-        db.commit()
-
-
 @router.post("/build", response_model=PortfolioResponse)
 def build_portfolio(
     request: PortfolioBuildRequest,
@@ -87,8 +38,10 @@ def build_portfolio(
 ) -> PortfolioResponse:
     """Build a portfolio: load prices → compute μ,Σ → MVO → Monte Carlo → save."""
 
-    # 1. Make sure all tickers have prices.
-    _ensure_prices_available(db, request.tickers)
+    # 1. Make sure all tickers have FRESH prices (latest trading day).
+    # Hits yfinance for any ticker whose cached data is older than 1 day,
+    # in parallel. Falls back to synthetic data if yfinance is unavailable.
+    ensure_prices_fresh(db, request.tickers, max_staleness_days=1)
 
     # 2. Load price history.
     prices = price_repo.get_price_history(db, request.tickers, years=10)
