@@ -27,8 +27,7 @@ from app.db import Base           # noqa: E402
 
 # Importing the models registers them on Base.metadata. Without this,
 # autogenerate sees no tables and produces empty migrations.
-# (Will be uncommented in Step 3 when models exist.)
-# from app.models import user, asset, price, portfolio  # noqa: F401, E402
+from app.models import user, asset, price, portfolio  # noqa: F401, E402
 
 
 # Alembic Config object — provides access to alembic.ini values.
