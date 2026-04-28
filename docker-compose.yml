@@ -1,0 +1,72 @@
+# Docker Compose configuration for Portfolio Builder.
+#
+# Three services:
+#   - db        : PostgreSQL 16, stores users / assets / prices / portfolios.
+#   - backend   : FastAPI app (Python 3.11), exposes the REST API on :8000.
+#   - frontend  : React + Vite dev server, served on :5173.
+#
+# Networking: Compose creates a default bridge network so services can
+# reach each other by service name (e.g. backend connects to "db:5432").
+#
+# Volumes: pgdata persists Postgres data between `docker compose down/up`.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-portfolio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio}
+      POSTGRES_DB: ${POSTGRES_DB:-portfolio_builder}
+    ports:
+      # Host port 5434 → container port 5432.
+      # We use 5434 (not 5432) on the host so it doesn't conflict with a
+      # locally-installed Postgres on the developer's machine.
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Compose waits until pg_isready returns success before marking
+      # the service "healthy". The backend depends_on uses this.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-portfolio}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    # uvicorn is the ASGI server that runs FastAPI.
+    # --reload picks up code changes during development.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      # Mount source code into the container so edits are picked up live.
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # These override whatever is in .env if needed; here they pin the
+      # in-Docker hostname (db) regardless of what .env says.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-portfolio}:${POSTGRES_PASSWORD:-portfolio}@db:5432/${POSTGRES_DB:-portfolio_builder}
+
+  frontend:
+    build: ./frontend
+    # Vite dev server. --host 0.0.0.0 makes it accessible from outside
+    # the container (the developer's browser).
+    command: npm run dev -- --host 0.0.0.0
+    volumes:
+      - ./frontend:/app
+      # Anonymous volume to keep node_modules inside the container
+      # (avoids the host's node_modules clobbering the container's).
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
