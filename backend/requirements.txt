@@ -11,7 +11,7 @@ psycopg2-binary==2.9.9           # Postgres driver
 alembic==1.13.3                  # Schema migrations
 
 # --- Validation / settings ---
-pydantic==2.9.2                  # Used by FastAPI internally too
+pydantic[email]==2.9.2           # Used by FastAPI internally too. [email] adds email-validator (required by EmailStr in schemas/auth.py).
 pydantic-settings==2.5.2         # BaseSettings for env-var loading
 
 # --- Auth ---

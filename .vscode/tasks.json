@@ -11,12 +11,16 @@
     // ────────────────────────────────────────────────────────────────
     {
       "label": "▶ Run Portfolio Builder (Full Stack)",
-      "detail": "Bring up db + backend + frontend, then apply migrations.",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "Docker: Up (db + backend + frontend)",
-        "Backend: Apply migrations"
-      ],
+      "detail": "Brings up db + backend + frontend, applies migrations, prints URLs, tails logs.",
+      "type": "shell",
+      "command": "./dev.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true,
+        "clear": true
+      },
       "group": {
         "kind": "build",
         "isDefault": true
