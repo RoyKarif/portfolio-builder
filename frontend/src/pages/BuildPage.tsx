@@ -153,6 +153,30 @@ export function BuildPage() {
           הכלי משתמש במודל המתמטי של מרקוביץ' (Mean-Variance Optimization) כדי
           לבחור עבורך את שילוב הנכסים שמקסים תשואה צפויה ברמת הסיכון שתבחר.
         </p>
+        {universe && universe.length > 0 && (
+          <details className="mt-3 text-sm text-gray-500">
+            <summary className="cursor-pointer hover:text-gray-700">
+              למה {universe.length} נכסים ולא 200? (לחץ להסבר)
+            </summary>
+            <div className="mt-2 leading-relaxed pr-4 border-r-2 border-gray-200">
+              היקום שלנו כולל {universe.length} ETFs מובחרים שמכסים 5 מחלקות
+              נכסים (מניות, אג"ח, סחורות, נדל"ן, מזומן), 11 סקטורים בארה"ב,
+              ו-6 שווקים בינלאומיים. <br />
+              <br />
+              למה לא יותר? Markowitz אומד μ (תשואה צפויה) ו-Σ (מטריצת
+              קוואריאנס) מ-~2,500 ימי מסחר היסטוריים. כל נכס נוסף = יותר
+              פרמטרים, אבל אותה כמות נתונים → אומדים פחות מדויקים →
+              אופטימיזציה פחות יציבה ("curse of dimensionality" קלאסי).
+              30-50 נכסים מאיכות גבוהה זה ה-sweet spot ב-Markowitz סטנדרטי.
+              <br />
+              <br />
+              רוצה להוסיף משהו ספציפי (למשל TSLA, BTC-USD)? פתח את
+              "<span className="font-semibold">⚙ מתקדם</span>" בתחתית
+              הטופס והוסף ticker מותאם — המערכת תמשוך אותו מ-yfinance
+              אוטומטית.
+            </div>
+          </details>
+        )}
       </div>
 
       <UniverseStatus universe={universe} error={universeError} />
