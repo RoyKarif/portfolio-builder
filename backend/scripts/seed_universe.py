@@ -4,11 +4,17 @@ of daily prices for each asset.
 Run with: `make seed` (or `python -m scripts.seed_universe` inside the
 container).
 
+Strategy:
+  1. Try to fetch real prices from yfinance.
+  2. If yfinance fails (Yahoo's API breaks regularly), fall back to
+     synthetic prices generated with GBM and realistic per-class μ/σ.
+     The synthetic data is deterministic (seeded by ticker hash) so
+     re-runs are reproducible.
+
 Idempotent: skips assets and prices that already exist. Safe to re-run
 after adding a new ticker to CURATED_UNIVERSE.
 
-The 20 ETFs are chosen to span major asset classes / regions / styles,
-so MVO has interesting diversification options.
+Pass --synthetic on the command line to skip yfinance entirely.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ import time
 
 from app.data import asset_repo, price_repo, yfinance_client
 from app.db import SessionLocal
+from scripts.synthetic_prices import synthetic_price_history
 
 
 # (ticker, display_name, asset_class)
@@ -51,57 +58,74 @@ CURATED_UNIVERSE: list[tuple[str, str, str]] = [
 ]
 
 
-def seed() -> None:
+def seed(force_synthetic: bool = False) -> None:
     """Run the full seed."""
     db = SessionLocal()
+    real_count = 0
+    synthetic_count = 0
     try:
         for ticker, name, asset_class in CURATED_UNIVERSE:
-            _seed_one(db, ticker, name, asset_class)
-            # Be polite to yfinance — half-second between requests.
-            time.sleep(0.5)
-        print(f"\n✅ seeded {len(CURATED_UNIVERSE)} assets.")
+            kind = _seed_one(db, ticker, name, asset_class, force_synthetic)
+            if kind == "real":
+                real_count += 1
+                time.sleep(0.5)  # be polite to yfinance
+            elif kind == "synthetic":
+                synthetic_count += 1
+        print()
+        print(f"✅ seeded {len(CURATED_UNIVERSE)} assets "
+              f"({real_count} real, {synthetic_count} synthetic).")
+        if synthetic_count > 0:
+            print("⚠ some assets used SYNTHETIC data (yfinance was unavailable).")
+            print("  This is fine for a demo, but the prices are simulated.")
     finally:
         db.close()
 
 
-def _seed_one(db, ticker: str, name: str, asset_class: str) -> None:
-    """Seed a single asset. Idempotent."""
+def _seed_one(db, ticker, name, asset_class, force_synthetic: bool) -> str:
+    """Seed a single asset. Returns 'real' or 'synthetic' depending on data source."""
     existing = asset_repo.get_asset_by_ticker(db, ticker)
     if existing is None:
         asset_repo.create_asset(
-            db,
-            ticker=ticker,
-            name=name,
-            asset_class=asset_class,
-            is_curated=True,
+            db, ticker=ticker, name=name,
+            asset_class=asset_class, is_curated=True,
         )
         print(f"➕ created asset {ticker}")
-    else:
-        # If it existed but wasn't curated (e.g. user-added it earlier),
-        # promote it to curated.
-        if not existing.is_curated:
-            existing.is_curated = True
-            existing.name = name
-            existing.asset_class = asset_class
-            db.commit()
-            print(f"⬆ promoted {ticker} to curated")
+    elif not existing.is_curated:
+        existing.is_curated = True
+        existing.name = name
+        existing.asset_class = asset_class
+        db.commit()
+        print(f"⬆ promoted {ticker} to curated")
 
-    # Always check if we need more price data.
-    print(f"📥 fetching prices for {ticker}…", end=" ", flush=True)
-    try:
-        rows = yfinance_client.fetch_price_history(ticker, years=10)
-    except yfinance_client.YFinanceError as e:
-        print(f"❌ skipped: {e}")
-        return
+    # Decide source: try yfinance unless forced to synthetic.
+    rows = None
+    source = "synthetic"
+    if not force_synthetic:
+        print(f"📥 fetching prices for {ticker} from yfinance...", end=" ", flush=True)
+        try:
+            rows = yfinance_client.fetch_price_history(ticker, years=10)
+            source = "real"
+            print(f"✅ {len(rows)} rows")
+        except yfinance_client.YFinanceError as e:
+            print(f"⚠ yfinance failed ({e}) — falling back to synthetic")
+
+    if rows is None:
+        print(f"🎲 generating synthetic 10y for {ticker} ({asset_class})...", end=" ", flush=True)
+        rows = synthetic_price_history(ticker, asset_class, years=10)
+        print(f"✅ {len(rows)} rows")
 
     inserted = price_repo.bulk_insert_prices(db, ticker, rows)
     db.commit()
-    print(f"✅ {inserted} new rows ({len(rows)} fetched)")
+    print(f"   → inserted {inserted} new price rows")
+    return source
 
 
 if __name__ == "__main__":
+    force_synthetic = "--synthetic" in sys.argv
+    if force_synthetic:
+        print("ℹ Running in SYNTHETIC mode (yfinance skipped).\n")
     try:
-        seed()
+        seed(force_synthetic=force_synthetic)
     except KeyboardInterrupt:
         print("\nInterrupted.")
         sys.exit(1)

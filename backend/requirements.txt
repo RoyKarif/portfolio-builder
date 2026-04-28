@@ -27,7 +27,12 @@ cvxpy==1.5.3                     # Convex optimization (MVO solver)
 scipy==1.13.1                    # Required by cvxpy; pin for reproducibility
 
 # --- External data ---
-yfinance==0.2.43                 # Yahoo Finance prices (only for custom tickers)
+# yfinance: scrapes Yahoo Finance. Yahoo periodically breaks the API,
+# so we keep this on the latest 0.2.x and pair it with curl_cffi which
+# impersonates a real browser (helps bypass anti-bot blocks).
+yfinance==0.2.51
+curl_cffi==0.7.4                 # Browser-fingerprint HTTP client used by yfinance
+requests==2.32.3                 # yfinance fallback HTTP client
 
 # --- Testing ---
 pytest==8.3.3
