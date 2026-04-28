@@ -129,9 +129,9 @@
 
     {
       "label": "Backend: Seed universe (20 ETFs + 10y prices)",
-      "detail": "Takes ~5 minutes. Idempotent.",
+      "detail": "Takes ~5 minutes. Idempotent. Auto-starts the stack if it's not running.",
       "type": "shell",
-      "command": "docker compose exec backend python -m scripts.seed_universe",
+      "command": "docker compose up -d && docker compose exec backend alembic upgrade head && docker compose exec backend python -m scripts.seed_universe",
       "options": { "cwd": "${workspaceFolder}" },
       "presentation": {
         "reveal": "always",
