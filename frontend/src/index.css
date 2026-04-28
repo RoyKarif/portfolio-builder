@@ -1,0 +1,17 @@
+/* Tailwind directives — these are replaced by tailwindcss with the
+   actual utility CSS at build time. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Minimal global styles. */
+body {
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+}
