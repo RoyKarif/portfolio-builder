@@ -1,13 +1,21 @@
 {
+  // VSCode tasks for Portfolio Builder.
+  //
+  // Run any task from: Cmd+Shift+P → "Tasks: Run Task" → pick from list.
+  // The default build task (Cmd+Shift+B) runs the full-stack starter.
   "version": "2.0.0",
+
   "tasks": [
+    // ────────────────────────────────────────────────────────────────
+    // MAIN — runs everything end-to-end.
+    // ────────────────────────────────────────────────────────────────
     {
-      "label": "Run Portfolio Builder (Full Stack)",
+      "label": "▶ Run Portfolio Builder (Full Stack)",
+      "detail": "Bring up db + backend + frontend, then apply migrations.",
       "dependsOrder": "sequence",
       "dependsOn": [
-        "Docker: Up (Backend + Workers + DB + Redis)",
-        "Backend: Run Migrations (Docker)",
-        "Frontend: Dev Server"
+        "Docker: Up (db + backend + frontend)",
+        "Backend: Apply migrations"
       ],
       "group": {
         "kind": "build",
@@ -15,28 +23,12 @@
       },
       "problemMatcher": []
     },
+
     {
-      "label": "Stop Portfolio Builder",
+      "label": "■ Stop Portfolio Builder",
       "type": "shell",
-      "command": "./scripts/stop.sh",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "panel": "dedicated",
-        "clear": true
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Docker: Up (Backend + Workers + DB + Redis)",
-      "type": "shell",
-      "command": "docker compose up -d --build",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "command": "docker compose down",
+      "options": { "cwd": "${workspaceFolder}" },
       "presentation": {
         "reveal": "always",
         "panel": "shared",
@@ -44,107 +36,99 @@
       },
       "problemMatcher": []
     },
+
+    // ────────────────────────────────────────────────────────────────
+    // Docker lifecycle
+    // ────────────────────────────────────────────────────────────────
     {
-      "label": "Docker: Up (DB + Redis only)",
+      "label": "Docker: Up (db + backend + frontend)",
       "type": "shell",
-      "command": "docker compose up -d db redis",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "command": "docker compose up -d --build",
+      "options": { "cwd": "${workspaceFolder}" },
       "presentation": {
         "reveal": "always",
-        "panel": "shared"
+        "panel": "shared",
+        "clear": true
       },
       "problemMatcher": []
     },
+
     {
-      "label": "Docker: Down (Stop All Containers)",
+      "label": "Docker: Up (db only)",
+      "detail": "Useful when you want to run backend/frontend locally instead of in containers.",
       "type": "shell",
-      "command": "docker compose down",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      },
+      "command": "docker compose up -d db",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared" },
       "problemMatcher": []
     },
+
+    {
+      "label": "Docker: Restart Backend",
+      "type": "shell",
+      "command": "docker compose restart backend",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+
     {
       "label": "Docker: Tail Backend Logs",
       "type": "shell",
       "command": "docker compose logs -f backend",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "isBackground": true,
-      "presentation": {
-        "reveal": "always",
-        "panel": "dedicated"
-      },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
       "problemMatcher": []
     },
+
+    {
+      "label": "Docker: Tail Frontend Logs",
+      "type": "shell",
+      "command": "docker compose logs -f frontend",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+
     {
       "label": "Docker: Tail All Logs",
       "type": "shell",
       "command": "docker compose logs -f",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "isBackground": true,
-      "presentation": {
-        "reveal": "always",
-        "panel": "dedicated"
-      },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
       "problemMatcher": []
     },
+
+    // ────────────────────────────────────────────────────────────────
+    // Backend
+    // ────────────────────────────────────────────────────────────────
     {
-      "label": "Backend: Run Migrations (Docker)",
+      "label": "Backend: Apply migrations",
       "type": "shell",
-      "command": "docker compose run --rm backend alembic upgrade head",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      },
+      "command": "docker compose exec backend alembic upgrade head",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared" },
       "problemMatcher": []
     },
+
     {
-      "label": "Backend: New Migration (Docker, autogenerate)",
+      "label": "Backend: New migration (autogenerate)",
       "type": "shell",
-      "command": "docker compose run --rm backend alembic revision --autogenerate -m \"${input:migrationMessage}\"",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      },
+      "command": "docker compose exec backend alembic revision --autogenerate -m \"${input:migrationMessage}\"",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared" },
       "problemMatcher": []
     },
+
     {
-      "label": "Backend: Run Tests (Docker)",
+      "label": "Backend: Seed universe (20 ETFs + 10y prices)",
+      "detail": "Takes ~5 minutes. Idempotent.",
       "type": "shell",
-      "command": "docker compose run --rm backend pytest -v --tb=short",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "dedicated"
-      },
-      "group": "test",
-      "problemMatcher": []
-    },
-    {
-      "label": "Backend: Shell (Docker)",
-      "type": "shell",
-      "command": "docker compose exec backend bash",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "command": "docker compose exec backend python -m scripts.seed_universe",
+      "options": { "cwd": "${workspaceFolder}" },
       "presentation": {
         "reveal": "always",
         "panel": "dedicated",
@@ -152,26 +136,72 @@
       },
       "problemMatcher": []
     },
+
     {
-      "label": "Frontend: Install Dependencies",
+      "label": "Backend: Run tests",
       "type": "shell",
-      "command": "npm install",
-      "options": {
-        "cwd": "${workspaceFolder}/frontend"
-      },
+      "command": "docker compose exec backend pytest -v --tb=short",
+      "options": { "cwd": "${workspaceFolder}" },
       "presentation": {
         "reveal": "always",
-        "panel": "shared"
+        "panel": "dedicated",
+        "focus": true
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
       },
       "problemMatcher": []
     },
+
     {
-      "label": "Frontend: Dev Server",
+      "label": "Backend: Shell (bash)",
+      "type": "shell",
+      "command": "docker compose exec backend bash",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+
+    // ────────────────────────────────────────────────────────────────
+    // DB
+    // ────────────────────────────────────────────────────────────────
+    {
+      "label": "DB: psql shell",
+      "type": "shell",
+      "command": "docker compose exec db psql -U portfolio -d portfolio_builder",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+
+    // ────────────────────────────────────────────────────────────────
+    // Frontend (these are useful only if you run frontend OUTSIDE Docker;
+    // by default `docker compose up` starts the frontend container too.)
+    // ────────────────────────────────────────────────────────────────
+    {
+      "label": "Frontend: Install dependencies (local)",
+      "type": "shell",
+      "command": "npm install",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Frontend: Dev server (local)",
+      "detail": "Run vite locally instead of in Docker. Useful for fast iteration.",
       "type": "shell",
       "command": "npm run dev",
-      "options": {
-        "cwd": "${workspaceFolder}/frontend"
-      },
+      "options": { "cwd": "${workspaceFolder}/frontend" },
       "isBackground": true,
       "presentation": {
         "reveal": "always",
@@ -179,13 +209,26 @@
         "group": "services"
       },
       "problemMatcher": []
+    },
+
+    {
+      "label": "Frontend: Build (typecheck + bundle)",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
     }
   ],
+
   "inputs": [
     {
       "id": "migrationMessage",
       "type": "promptString",
-      "description": "Migration message",
+      "description": "Migration message (English, snake_case-ish)",
       "default": "schema change"
     }
   ]
