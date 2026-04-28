@@ -1,13 +1,8 @@
 // Main page: friendly form on top, results below after submission.
 //
-// Design principles:
-//   - Default: user gives only 3 inputs (amount, horizon, risk). Asset
-//     selection is hidden behind a "customize" expander, because most
-//     users don't know what tickers to pick.
-//   - Each section has a header with a question and a one-line subtitle
-//     explaining what the input means.
-//   - The risk slider shows a plain-language description of the chosen level.
-//   - The submit button is large and primary-colored.
+// Design principle: the user gives 2 inputs (amount+horizon and risk).
+// Asset selection is COMPLETELY hidden by default — most users don't
+// know what tickers are. Only a small "advanced" link reveals it.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Layout } from "../components/Layout";
@@ -17,8 +12,7 @@ import { ResultsPanel } from "../components/ResultsPanel";
 import { api } from "../api";
 import type { Asset, PortfolioResponse } from "../types/api";
 
-// What each risk level *feels* like in plain language. Helps the user
-// understand what they're choosing.
+// Plain-language description of what each risk level means.
 const RISK_DESCRIPTIONS: Record<number, string> = {
   1: "תיק שמרני מאוד: רוב הכסף באג\"ח ומזומן. תנודות קטנות, תשואה צנועה. מתאים למי שמתעב הפסדים אפילו זמניים.",
   2: "תיק שמרני: בעיקר אג\"ח עם אחוז קטן של מניות. תנודתיות נמוכה.",
@@ -28,31 +22,63 @@ const RISK_DESCRIPTIONS: Record<number, string> = {
 };
 
 export function BuildPage() {
-  const [universe, setUniverse] = useState<Asset[]>([]);
+  // universe = the curated tickers from the backend. null = still loading,
+  // [] = loaded but empty (seed wasn't run), [...] = ready.
+  const [universe, setUniverse] = useState<Asset[] | null>(null);
+  const [universeError, setUniverseError] = useState<string | null>(null);
+
   const [amount, setAmount] = useState(10000);
   const [risk, setRisk] = useState(3);
   const [horizon, setHorizon] = useState(10);
+
+  // Tickers actually used for the build. By default = entire universe.
+  // Only changed if the user opens the advanced customizer.
   const [tickers, setTickers] = useState<string[]>([]);
-  const [showCustomize, setShowCustomize] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   const [result, setResult] = useState<PortfolioResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // On mount: load the curated universe and pre-select all of it.
+  // Load curated universe on mount.
   useEffect(() => {
-    api.universe.getCurated().then((u) => {
-      setUniverse(u);
-      setTickers(u.map((a) => a.ticker));
-    });
+    api.universe.getCurated()
+      .then((u) => {
+        setUniverse(u);
+        setTickers(u.map((a) => a.ticker));  // pre-select everything
+      })
+      .catch(() => {
+        setUniverseError("לא הצלחתי לטעון את רשימת הנכסים מהשרת.");
+      });
   }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (tickers.length < 2) {
-      setError("יש לבחור לפחות 2 נכסים");
+
+    // Guard: universe not yet loaded.
+    if (universe === null) {
+      setError("הנתונים עדיין נטענים. רגע אחד...");
       return;
     }
+
+    // Guard: universe is empty — seed hasn't run.
+    if (universe.length === 0) {
+      setError(
+        "המערכת ריקה מנכסים. כנראה שהזרעה הראשונית עדיין לא רצה. " +
+        "הרץ בטרמינל את הפקודה: make seed (זה לוקח ~5 דקות)."
+      );
+      return;
+    }
+
+    // Guard: user opened advanced and deselected too many.
+    if (tickers.length < 2) {
+      setError(
+        "במצב מתקדם: הסרת יותר מדי נכסים. השאר לפחות 2 כדי שהמערכת תוכל לחשב פיזור."
+      );
+      return;
+    }
+
     setSubmitting(true);
     setResult(null);
     try {
@@ -63,7 +89,6 @@ export function BuildPage() {
         tickers,
       });
       setResult(portfolio);
-      // Smooth scroll to results.
       setTimeout(() => {
         document.getElementById("results")?.scrollIntoView({ behavior: "smooth" });
       }, 100);
@@ -76,13 +101,13 @@ export function BuildPage() {
     }
   };
 
-  // Customs = tickers the user added that aren't in the curated universe.
-  const customCount = tickers.filter(
-    (t) => !universe.some((a) => a.ticker === t),
-  ).length;
-  const excludedCount = universe.filter(
-    (a) => !tickers.includes(a.ticker),
-  ).length;
+  const universeReady = universe !== null && universe.length > 0;
+  const customCount = universe
+    ? tickers.filter((t) => !universe.some((a) => a.ticker === t)).length
+    : 0;
+  const excludedCount = universe
+    ? universe.filter((a) => !tickers.includes(a.ticker)).length
+    : 0;
 
   return (
     <Layout>
@@ -92,9 +117,15 @@ export function BuildPage() {
         <p className="text-gray-600 mt-2 leading-relaxed">
           הכלי משתמש במודל המתמטי של מרקוביץ' (Mean-Variance Optimization) כדי
           לבחור עבורך את שילוב הנכסים שמקסים תשואה צפויה ברמת הסיכון שתבחר.
-          ענה על שלוש שאלות, ולחץ "בנה".
+          ענה על שתי שאלות, ולחץ "בנה".
         </p>
       </div>
+
+      {/* Universe-loading status banner */}
+      <UniverseStatus
+        universe={universe}
+        error={universeError}
+      />
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* === Section 1: Amount + Horizon === */}
@@ -116,9 +147,7 @@ export function BuildPage() {
                   className="w-full border rounded px-3 py-2 pr-7 text-lg"
                   required
                 />
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                  $
-                </span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
               </div>
             </Field>
             <Field label="אופק זמן" hint="בין שנה ל-30 שנה. המלצה: 5+">
@@ -132,9 +161,7 @@ export function BuildPage() {
                   className="w-full border rounded px-3 py-2 pr-12 text-lg"
                   required
                 />
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                  שנים
-                </span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">שנים</span>
               </div>
             </Field>
           </div>
@@ -154,73 +181,63 @@ export function BuildPage() {
           </div>
         </Section>
 
-        {/* === Section 3 (collapsible): Customize universe === */}
-        <Section
-          number={3}
-          title="יקום הנכסים"
-          subtitle="הכלי בוחר אוטומטית מתוך 20 ETFs נבחרים. תוכל להסיר או להוסיף לפי טעמך."
-        >
-          {!showCustomize ? (
-            <div className="flex items-center justify-between bg-gray-50 rounded p-4">
-              <div>
-                <div className="font-medium">
-                  משתמשים ב-{tickers.length} נכסים
-                  {excludedCount > 0 && (
-                    <span className="text-gray-500"> ({excludedCount} הוסרו)</span>
-                  )}
-                  {customCount > 0 && (
-                    <span className="text-blue-600"> ({customCount} מותאמים)</span>
-                  )}
-                </div>
-                <div className="text-sm text-gray-500 mt-1">
-                  ברירת המחדל: כל ה-ETFs הנבחרים. אפשר לערוך.
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowCustomize(true)}
-                className="text-blue-600 hover:text-blue-800 font-medium"
-              >
-                התאם אישית ←
-              </button>
-            </div>
-          ) : (
-            <div>
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-sm text-gray-600">
-                  בטל סימון כדי להסיר נכס. הוסף ticker מותאם בתחתית.
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowCustomize(false)}
-                  className="text-gray-500 hover:text-gray-700 text-sm"
-                >
-                  סגור ▴
-                </button>
-              </div>
-              <UniverseSelector
-                universe={universe}
-                selected={tickers}
-                onChange={setTickers}
-              />
-            </div>
-          )}
-        </Section>
-
         {error && (
           <div className="bg-red-50 border-r-4 border-red-500 p-4 rounded">
-            <div className="text-red-700 font-medium">{error}</div>
+            <div className="text-red-700 font-medium leading-relaxed">{error}</div>
           </div>
         )}
 
         {/* === Submit === */}
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || !universeReady}
           className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white py-4 rounded-lg text-lg font-semibold shadow-md transition"
         >
-          {submitting ? "מחשב את הפורטפוליו האופטימלי..." : "בנה את הפורטפוליו שלי ←"}
+          {submitting
+            ? "מחשב את הפורטפוליו האופטימלי..."
+            : !universeReady
+              ? "טוען נתונים..."
+              : "בנה את הפורטפוליו שלי ←"}
         </button>
+
+        {/* === Advanced (collapsible) — at the BOTTOM, intentionally less visible === */}
+        <div className="pt-6 border-t">
+          {!showAdvanced ? (
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(true)}
+              className="text-sm text-gray-500 hover:text-blue-600"
+            >
+              ⚙ מתקדם: התאם את רשימת הנכסים שהמערכת בוחרת מתוכם
+            </button>
+          ) : (
+            <Section
+              number={3}
+              title="התאמה אישית של יקום הנכסים (מתקדם)"
+              subtitle="המערכת בוחרת אוטומטית מתוך הרשימה. הסר סימון כדי להוציא נכס, או הוסף ticker מותאם בתחתית."
+            >
+              <div className="flex justify-between items-center mb-3 text-sm text-gray-600">
+                <span>
+                  {tickers.length} נכסים פעילים
+                  {excludedCount > 0 && <span className="text-gray-500"> · {excludedCount} הוסרו</span>}
+                  {customCount > 0 && <span className="text-blue-600"> · {customCount} מותאמים</span>}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  סגור ▴
+                </button>
+              </div>
+              <UniverseSelector
+                universe={universe ?? []}
+                selected={tickers}
+                onChange={setTickers}
+              />
+            </Section>
+          )}
+        </div>
       </form>
 
       {result && (
@@ -233,6 +250,46 @@ export function BuildPage() {
 }
 
 // ─── Inline UI building blocks ──────────────────────────────────────────
+
+function UniverseStatus({
+  universe,
+  error,
+}: {
+  universe: Asset[] | null;
+  error: string | null;
+}) {
+  if (error) {
+    return (
+      <div className="mb-6 bg-red-50 border-r-4 border-red-500 p-4 rounded">
+        <div className="text-red-700 font-medium">{error}</div>
+        <div className="text-sm text-red-600 mt-1">
+          ודא שה-backend פעיל (<code>make up</code>) ושההגירות רצו (<code>make migrate</code>).
+        </div>
+      </div>
+    );
+  }
+  if (universe === null) {
+    return (
+      <div className="mb-6 bg-gray-50 border-r-4 border-gray-300 p-4 rounded text-gray-700">
+        טוען רשימת נכסים מהשרת...
+      </div>
+    );
+  }
+  if (universe.length === 0) {
+    return (
+      <div className="mb-6 bg-yellow-50 border-r-4 border-yellow-500 p-4 rounded">
+        <div className="text-yellow-800 font-medium">המערכת ריקה מנכסים.</div>
+        <div className="text-sm text-yellow-700 mt-1 leading-relaxed">
+          הזרעה הראשונית של 10 שנות מחירים עדיין לא רצה. הרץ בטרמינל:{" "}
+          <code className="bg-yellow-100 px-1 rounded">make seed</code>{" "}
+          (לוקח ~5 דקות, מוריד מ-yfinance). אחרי שזה מסתיים — רענן את הדף.
+        </div>
+      </div>
+    );
+  }
+  // Universe loaded successfully — no banner.
+  return null;
+}
 
 function Section({
   number,
