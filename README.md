@@ -101,6 +101,9 @@ for our universe size, with identical statistical results.
 
 ## Quick Start
 
+> **Live demo:** not deployed publicly — run locally with the steps below
+> (one command, takes ~30 seconds after the first build).
+
 ```bash
 git clone https://github.com/RoyKarif/portfolio-builder
 cd portfolio-builder
