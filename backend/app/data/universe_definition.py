@@ -5,7 +5,7 @@ Used by:
   - scripts.seed_universe (CLI tool) for manual bulk seed
   - app.data.price_fetcher (auto-fetcher) to know which class is which
 
-Selection rationale (32 ETFs):
+Selection rationale (33 ETFs):
   - Span 5 asset classes (equity, bond, commodity, real_estate, cash).
   - Within equity: cover broad-market US, all 11 GICS sectors, and
     multiple international regions (developed, emerging, EU, Japan,
@@ -14,10 +14,10 @@ Selection rationale (32 ETFs):
     investment grade and high yield.
   - Each ticker chosen for liquidity, expense ratio, and AUM, so historical
     data is reliable.
-  - 32 sits in the textbook "sweet spot" for Markowitz: enough for
+  - 33 sits in the textbook "sweet spot" for Markowitz: enough for
     meaningful diversification across asset classes and geographies,
     not so many that estimation noise in μ and Σ dominates the signal.
-    With ~2500 days of data, 32 assets gives roughly 78x more observations
+    With ~2500 days of data, 33 assets gives roughly 76x more observations
     than parameters — plenty of statistical headroom.
 """
 

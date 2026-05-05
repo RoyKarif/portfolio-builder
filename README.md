@@ -18,7 +18,7 @@
 A user signs up, fills in a short form (investment amount, time horizon,
 risk level, asset preferences, country of residence), and the app returns:
 
-- **Optimal weights** across a curated universe of 32 ETFs
+- **Optimal weights** across a curated universe of 33 ETFs
 - **Expected return, volatility, and Sharpe ratio**
 - **Monte Carlo fan chart** of 10,000 simulated paths
 - **Histogram of final values** with Value-at-Risk
@@ -94,7 +94,7 @@ forced to diversify across asset classes.
 
 Generates 10,000 future paths under multivariate-normal returns. Optimized
 by sampling directly from the *portfolio's univariate Normal*
-`wᵀr ~ N(wᵀμ, wᵀΣw)` instead of from the asset MVN — a 32× speedup
+`wᵀr ~ N(wᵀμ, wᵀΣw)` instead of from the asset MVN — a 33× speedup
 for our universe size, with identical statistical results.
 
 ---
@@ -140,7 +140,7 @@ backend/
 │   └── main.py      # FastAPI app + lifespan startup
 ├── alembic/         # Schema migrations
 ├── scripts/         # Optional manual seed; synthetic price generator
-└── tests/           # ~33 pytest tests
+└── tests/           # 33 pytest tests
 
 frontend/
 ├── src/
@@ -165,12 +165,14 @@ Detailed file-by-file documentation is in [`docs/PROJECT_STRUCTURE.md`](docs/PRO
 make test
 ```
 
-Pyramid:
-- **Engine** (~17 tests): MVO constraints, Monte Carlo reproducibility,
-  return/statistics math.
-- **API** (~12 tests): auth flow, full portfolio build, cross-user
-  authorization.
-- **Data** (~4 tests): repository round-trips.
+Currently 33 tests: 21 engine tests (MVO constraints, Monte Carlo
+reproducibility, return/statistics math) and 12 API tests (auth flow,
+full portfolio build, cross-user authorization).
+
+Tests run inside the Docker backend container. Native `pytest` on the
+host requires building cvxpy from source (the `ecos` wheel does not
+install on most environments), so prefer `make test`, which runs against
+the containerized stack.
 
 CI runs the full suite on every push, against a real Postgres service
 container.
