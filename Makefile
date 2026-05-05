@@ -26,8 +26,22 @@ logs:           ## Tail logs of the backend service
 logs-all:       ## Tail logs of all services
 	docker compose logs -f
 
-test:           ## Run the backend test suite
-	docker compose exec backend pytest -v
+test:           ## Run the backend test suite (creates+migrates test DB on first run)
+	@# Idempotent: the CREATE DATABASE only runs if portfolio_builder_test
+	@# doesn't yet exist. Repeat invocations are no-ops on the DB side.
+	@docker compose exec -T db psql -U portfolio -d postgres -tc \
+	  "SELECT 1 FROM pg_database WHERE datname='portfolio_builder_test'" | grep -q 1 \
+	  || docker compose exec -T db psql -U portfolio -d postgres -c \
+	  "CREATE DATABASE portfolio_builder_test"
+	@# Apply migrations to the test DB. Alembic itself is idempotent.
+	docker compose exec -T \
+	  -e DATABASE_URL=postgresql://portfolio:portfolio@db:5432/portfolio_builder_test \
+	  backend alembic upgrade head
+	@# Run pytest. The conftest fixture rolls back rows after each test,
+	@# so the test DB stays clean across runs and we do not drop it.
+	docker compose exec -T \
+	  -e TEST_DATABASE_URL=postgresql://portfolio:portfolio@db:5432/portfolio_builder_test \
+	  backend pytest -v
 
 migrate:        ## Apply database migrations
 	docker compose exec backend alembic upgrade head
