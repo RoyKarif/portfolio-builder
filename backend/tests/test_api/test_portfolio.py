@@ -1,5 +1,11 @@
 """Integration tests for /api/portfolios."""
 
+# The eight tickers seeded by conftest.seeded_db. Tests that go through
+# the build path send all of them, because the production MVO config
+# (per-asset cap 0.20 + class caps) requires a universe of at least
+# ~5 holdings spread across multiple classes to be feasible.
+SEEDED_TICKERS = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH"]
+
 
 def test_build_portfolio_full_flow(authenticated_client, seeded_db):
     """The end-to-end happy path: build → save → list → fetch."""
@@ -7,7 +13,7 @@ def test_build_portfolio_full_flow(authenticated_client, seeded_db):
         "amount": 10000,
         "risk_level": 3,
         "horizon_years": 5,
-        "tickers": ["AAA", "BBB", "CCC"],
+        "tickers": SEEDED_TICKERS,
     })
     assert r.status_code == 200, r.text
     body = r.json()
@@ -56,7 +62,7 @@ def test_get_portfolio_of_other_user_404(authenticated_client, seeded_db, db, te
     # Build a portfolio as test_user.
     r = authenticated_client.post("/api/portfolios/build", json={
         "amount": 10000, "risk_level": 3, "horizon_years": 5,
-        "tickers": ["AAA", "BBB", "CCC"],
+        "tickers": SEEDED_TICKERS,
     })
     pid = r.json()["id"]
 
@@ -79,6 +85,6 @@ def test_universe_endpoint_returns_curated(client, seeded_db):
     r = client.get("/api/universe")
     assert r.status_code == 200
     body = r.json()
-    assert len(body) == 3  # AAA, BBB, CCC from seeded_db
+    assert len(body) == len(SEEDED_TICKERS)
     tickers = {a["ticker"] for a in body}
-    assert tickers == {"AAA", "BBB", "CCC"}
+    assert tickers == set(SEEDED_TICKERS)

@@ -6,10 +6,14 @@ import pytest
 from app.engine.mvo import solve_mvo, RISK_LEVEL_TO_VOLATILITY
 
 
+# Tests that exercise the *math* on tiny (3-asset) universes pass
+# max_single_weight=1.0 explicitly. The default per-asset cap (0.20) plus
+# sum(w)=1 requires at least 5 assets to be feasible — that diversification
+# behavior is covered separately by test_mvo_diversification_constraint_enforced.
 def test_mvo_weights_sum_to_one():
     mu = np.array([0.10, 0.06, 0.04])
     sigma = np.diag([0.04, 0.02, 0.01])  # uncorrelated
-    w = solve_mvo(mu, sigma, target_volatility=0.15)
+    w = solve_mvo(mu, sigma, target_volatility=0.15, max_single_weight=1.0)
     assert abs(w.sum() - 1.0) < 1e-6
 
 
@@ -17,7 +21,7 @@ def test_mvo_long_only():
     """No negative weights."""
     mu = np.array([0.10, 0.06, 0.04])
     sigma = np.diag([0.04, 0.02, 0.01])
-    w = solve_mvo(mu, sigma, target_volatility=0.15)
+    w = solve_mvo(mu, sigma, target_volatility=0.15, max_single_weight=1.0)
     assert (w >= -1e-9).all()
 
 
@@ -39,7 +43,7 @@ def test_mvo_target_volatility_respected():
         [0.00, 0.00, 0.01],
     ])
     target = 0.12
-    w = solve_mvo(mu, sigma, target_volatility=target)
+    w = solve_mvo(mu, sigma, target_volatility=target, max_single_weight=1.0)
     portfolio_vol = float(np.sqrt(w @ sigma @ w))
     assert portfolio_vol <= target + 1e-3
 

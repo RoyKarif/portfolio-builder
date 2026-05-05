@@ -97,15 +97,27 @@ def authenticated_client(client, test_user) -> TestClient:
 
 @pytest.fixture
 def seeded_db(db) -> None:
-    """Populate db with three synthetic assets and 1 year of fake prices.
+    """Populate db with eight synthetic assets and 1 year of fake prices.
 
     Prices are deterministic (seed=0) so engine tests are reproducible.
+
+    Universe size = 8: large enough to satisfy the production MVO config,
+    which uses max_single_weight=0.20 (forces ≥5 holdings) and asymmetric
+    class caps (equity ≤70%, commodity ≤30%, bond/cash uncapped). The mix
+    below — 5 equity + 2 bond + 1 cash — leaves enough non-equity to
+    satisfy the equity cap, and enough holdings overall for the per-asset
+    cap to be feasible.
     """
     rng = np.random.default_rng(0)
     assets = [
-        ("AAA", "Asset A", "equity"),
-        ("BBB", "Asset B", "equity"),
-        ("CCC", "Asset C", "bond"),
+        ("AAA", "Equity A", "equity"),
+        ("BBB", "Equity B", "equity"),
+        ("CCC", "Equity C", "equity"),
+        ("DDD", "Equity D", "equity"),
+        ("EEE", "Equity E", "equity"),
+        ("FFF", "Bond F",   "bond"),
+        ("GGG", "Bond G",   "bond"),
+        ("HHH", "Cash H",   "cash"),
     ]
     for ticker, name, asset_class in assets:
         db.add(Asset(
@@ -114,17 +126,37 @@ def seeded_db(db) -> None:
         ))
     db.commit()
 
-    # Generate 1 year of synthetic daily prices for each asset.
-    # Different drifts so MVO has interesting choices.
-    drifts = {"AAA": 0.0008, "BBB": 0.0004, "CCC": 0.0001}
-    vols = {"AAA": 0.012, "BBB": 0.010, "CCC": 0.003}
-    start = date.today() - timedelta(days=400)
+    # Per-ticker (drift, vol) — different enough that MVO has interesting
+    # choices across risk levels but not so different that the optimizer
+    # collapses onto a single asset.
+    params = {
+        "AAA": (0.0009, 0.013),
+        "BBB": (0.0007, 0.012),
+        "CCC": (0.0006, 0.011),
+        "DDD": (0.0005, 0.010),
+        "EEE": (0.0004, 0.009),
+        "FFF": (0.0002, 0.004),
+        "GGG": (0.0001, 0.003),
+        "HHH": (0.00005, 0.001),
+    }
 
-    for ticker in drifts:
+    # Generate 252 weekday-only trading days ending today. Walking back
+    # from today (instead of forward from a fixed start) is what keeps
+    # the latest price date == today, which lets ensure_prices_fresh
+    # treat the cache as fresh and skip the yfinance/synthetic re-fetch
+    # — so tests run against fully deterministic seeded data.
+    trading_days: list[date] = []
+    d = date.today()
+    while len(trading_days) < 252:
+        if d.weekday() < 5:  # Mon-Fri only
+            trading_days.append(d)
+        d -= timedelta(days=1)
+    trading_days.reverse()  # oldest first, so prices compound forward
+
+    for ticker, (drift, vol) in params.items():
         price = 100.0
-        for i in range(252):
-            dt = start + timedelta(days=i)
-            r = rng.normal(drifts[ticker], vols[ticker])
+        for dt in trading_days:
+            r = rng.normal(drift, vol)
             price = price * np.exp(r)
             db.add(Price(
                 ticker=ticker,

@@ -24,9 +24,12 @@ def test_covariance_matrix_diagonal_is_variance():
     })
     sigma = covariance_matrix(daily)
 
-    # Annualized variance ≈ 0.01² × 252 = 0.0252
+    # Annualized variance ≈ 0.01² × 252 = 0.0252.
+    # 1σ noise of the sample-variance estimator on n=1000 normals is
+    # √(2σ⁴/(n-1)) ≈ 4.5e-6 daily → ×252 ≈ 1.1e-3 annualized — so any
+    # tolerance below ~1e-3 is sub-1σ and flaky. We use 5e-3 (~4.5σ).
     assert sigma.shape == (1, 1)
-    assert abs(sigma[0, 0] - 0.0001 * 252) < 0.001
+    assert abs(sigma[0, 0] - 0.0001 * 252) < 0.005
 
 
 def test_covariance_matrix_off_diagonal_independent():
